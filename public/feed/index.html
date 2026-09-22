@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Mya Feed</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #040508;
+            --panel: rgba(10, 13, 19, 0.88);
+            --panel-strong: rgba(6, 9, 14, 0.95);
+            --line: rgba(255, 255, 255, 0.1);
+            --text: #f4f7fb;
+            --muted: #9aa7bb;
+            --chip: rgba(255, 255, 255, 0.06);
+            --accent: #ff5b2e;
+            --accent-soft: rgba(255, 91, 46, 0.18);
+            --shadow: 0 28px 80px rgba(0, 0, 0, 0.45);
+        }
+
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'IBM Plex Sans', system-ui, sans-serif;
+            overflow: hidden;
+        }
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background:
+                radial-gradient(circle at 15% 10%, rgba(255, 91, 46, 0.18), transparent 26%),
+                radial-gradient(circle at 85% 15%, rgba(0, 198, 255, 0.12), transparent 24%),
+                linear-gradient(180deg, #090b10 0%, #030406 100%);
+        }
+
+        a { color: inherit; text-decoration: none; }
+        button { font: inherit; }
+
+        .topbar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 40;
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+            align-items: center;
+            padding: 1rem 1.15rem;
+            pointer-events: none;
+        }
+        .topbar-card {
+            pointer-events: auto;
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+            padding: 0.85rem 1rem;
+            border-radius: 999px;
+            background: rgba(6, 9, 14, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(18px);
+            box-shadow: var(--shadow);
+        }
+        .brand-mark {
+            width: 2.3rem;
+            height: 2.3rem;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #ff5b2e, #ff9a3d);
+            color: #140701;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+        }
+        .brand-copy {
+            display: flex;
+            flex-direction: column;
+            gap: 0.12rem;
+        }
+        .brand-title {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 0.98rem;
+            font-weight: 700;
+            letter-spacing: -0.04em;
+        }
+        .brand-subtitle {
+            color: var(--muted);
+            font-size: 0.72rem;
+        }
+        .topbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+        }
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            min-height: 2.5rem;
+            padding: 0 0.9rem;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: var(--text);
+            font-size: 0.82rem;
+        }
+        .pill strong {
+            font-weight: 700;
+            color: white;
+        }
+        .ghost-button,
+        .accent-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 2.65rem;
+            padding: 0 1rem;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            cursor: pointer;
+            transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+        }
+        .ghost-button {
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text);
+        }
+        .accent-button {
+            background: linear-gradient(135deg, #ff5b2e, #ff8e3c);
+            color: #130500;
+            font-weight: 700;
+            border-color: rgba(255, 145, 90, 0.38);
+        }
+        .ghost-button:hover,
+        .accent-button:hover {
+            transform: translateY(-1px);
+        }
+
+        .feed-shell {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            overflow-y: auto;
+            scroll-snap-type: y mandatory;
+            scroll-behavior: smooth;
+        }
+        .feed-shell::-webkit-scrollbar { width: 0; height: 0; }
+
+        .feed-slide {
+            position: relative;
+            min-height: 100vh;
+            padding: 5.75rem 1rem 1.5rem;
+            scroll-snap-align: start;
+            scroll-snap-stop: always;
+            display: grid;
+            align-items: stretch;
+        }
+        .feed-slide::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(circle at 20% 20%, var(--accent-soft), transparent 26%),
+                linear-gradient(180deg, rgba(4, 5, 8, 0.36), rgba(4, 5, 8, 0.82));
+            opacity: 0.95;
+        }
+        .feed-poster {
+            position: absolute;
+            inset: 0;
+            background-position: center;
+            background-size: cover;
+            filter: blur(22px) saturate(1.18);
+            transform: scale(1.08);
+            opacity: 0.34;
+        }
+        .feed-slide-inner {
+            position: relative;
+            z-index: 1;
+            width: min(1380px, 100%);
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.72fr);
+            gap: 1.1rem;
+            min-height: calc(100vh - 7.25rem);
+        }
+        .experience-panel,
+        .meta-panel {
+            border-radius: 2rem;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: linear-gradient(180deg, rgba(8, 11, 16, 0.76), rgba(6, 8, 12, 0.92));
+            backdrop-filter: blur(18px);

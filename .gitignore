@@ -1,0 +1,67 @@
+# Dependencies
+node_modules/
+
+# Runtime and temporary data
+.tmp/
+.tools/
+.claude/
+.agents/
+uploads/
+published_builds/
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+database.sqlite
+.env
+.env.*
+*.log
+.mya-server.pid
+.ai-settings.json
+.tmp_story.json
+_patch_features.js
+
+# Strictly exclude all user-uploaded and user-generated media (no private videos, clips, audio, thumbnails, or exports)
+public/videos/*
+!public/videos/.gitkeep
+public/clips/*
+!public/clips/.gitkeep
+public/thumbnails/*
+!public/thumbnails/.gitkeep
+public/gifs/*
+!public/gifs/.gitkeep
+public/audio/*
+!public/audio/.gitkeep
+public/exports/*
+!public/exports/.gitkeep
+
+# Exclude media binary formats
+*.mp4
+*.MP4
+*.mov
+*.MOV
+*.avi
+*.mkv
+*.webm
+*.flv
+*.wmv
+*.m4v
+*.mp3
+*.wav
+*.aac
+*.ogg
+*.flac
+*.m4a
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+*.bmp
+*.tiff
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
