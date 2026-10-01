@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-This repository is a small Node.js app centered on [`server.js`](D:/Projects/MyaStudio1/server.js), which defines the Express API, SQLite schema, upload handling, and ffmpeg clip/export logic. Static UI and generated media live under `public/`:
+This repository is a small Node.js app centered on [`server.js`](server.js), which defines the Express API, SQLite schema, upload handling, and ffmpeg clip/export logic. Static UI and generated media live under `public/`:
 
 - `public/index.html`: browser entry point
 - `public/videos`, `public/audio`: uploaded source files
@@ -21,7 +21,7 @@ The app listens on `HOST` and `PORT`; defaults are `127.0.0.1` and `3000`.
 Match the existing code style in `server.js`: 4-space indentation, semicolons, CommonJS `require`, and concise route handlers. Use `camelCase` for variables/functions, `UPPER_SNAKE_CASE` for environment-driven constants, and descriptive API paths such as `/api/create_event_clip`. Keep filesystem paths rooted with `path.join(__dirname, ...)`.
 
 ## Testing Guidelines
-There is currently no automated test suite. `npm test` is a placeholder that fails by design, so do not rely on it. For changes, verify manually by:
+Automated tests live in `tests/` and run with `npm test` (`node --test tests/published-player.test.js tests/movie-agent.test.js`). Keep them green after touching `lib/` or the publish path. For UI changes in `public/index.html`, also verify manually by:
 
 1. Starting the app locally.
 2. Uploading a sample video/audio file.

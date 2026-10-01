@@ -155,3 +155,61 @@ test('published analytics queue is retained when the server rejects an event', (
     assert.match(html, /if \(!response\.ok\) throw new Error\('Analytics request failed'\)/);
     assert.match(html, /Events stay queued for next attempt/);
 });
+
+test('published player previews choice clips on hover and resumes from the trigger moment by default', () => {
+    const html = buildPublishedPlayerHtml({
+        safeTitle: 'Preview Test',
+        themeColor: '#2563eb',
+        clips: [
+            { unique_id: 'main', name: 'Main story', filepath: 'clips/main.mp4', thumbnail: 'clips/main.jpg', duration: 12, mute_audio: 0, is_event_clip: 0, bg_music: null },
+            { unique_id: 'branch', name: 'Branch', filepath: 'clips/branch.mp4', thumbnail: 'clips/branch.jpg', duration: 4, mute_audio: 0, is_event_clip: 0, bg_music: null }
+        ],
+        logicBlocks: [
+            // Note: no explicit `return` flag on the choice — the default must kick in.
+            { id: 'decision', from: 'main', time: 4, choices: [{ to: 'branch', label: 'Take the branch', color: '#f8fafc', action: 'target' }] }
+        ],
+        seq: [{ id: 'main', name: 'Main story', startTime: 0 }],
+        projectId: 11
+    });
+
+    // Hover preview markup and handlers on each choice card.
+    assert.match(html, /class="choice-preview-video"/);
+    assert.match(html, /:src="getChoiceVideo\(ch\)"/);
+    assert.match(html, /@mouseenter="startChoicePreview\(ch, \$event\)"/);
+    assert.match(html, /@mouseleave="stopChoicePreview\(\$event\)"/);
+    assert.match(html, /@focus="startChoicePreview\(ch, \$event\)"/);
+    assert.match(html, /@blur="stopChoicePreview\(\$event\)"/);
+    assert.match(html, /choice-preview-badge/);
+    // Preview helper methods exist in the player script.
+    assert.match(html, /getChoiceVideo\(choice\)/);
+    assert.match(html, /getChoicePreviewStartTime\(choice\)/);
+    assert.match(html, /startChoicePreview\(choice, event\)/);
+    assert.match(html, /stopAllChoicePreviews\(except\)/);
+    assert.match(html, /video\.play\(\)\.catch\(\(\) => \{\}\)/);
+    // Return-to-trigger is the default when the flag is absent.
+    assert.match(html, /if \(choice\.return !== false\)/);
+    assert.match(html, /resumes from this exact moment/);
+    // Clicking a choice stops any running hover previews first.
+    assert.match(html, /this\.stopAllChoicePreviews\(\);/);
+});
+
+test('published player still honors an explicit permanent branch (return === false)', () => {
+    const html = buildPublishedPlayerHtml({
+        safeTitle: 'Permanent Branch Test',
+        themeColor: '#2563eb',
+        clips: [
+            { unique_id: 'main', name: 'Main story', filepath: 'clips/main.mp4', thumbnail: '', duration: 12, mute_audio: 0, is_event_clip: 0, bg_music: null },
+            { unique_id: 'ending', name: 'Ending', filepath: 'clips/ending.mp4', thumbnail: '', duration: 5, mute_audio: 0, is_event_clip: 0, bg_music: null }
+        ],
+        logicBlocks: [
+            { id: 'decision', from: 'main', time: 4, choices: [{ to: 'ending', label: 'Walk away', color: '#f8fafc', return: false, action: 'target' }] }
+        ],
+        seq: [{ id: 'main', name: 'Main story', startTime: 0 }],
+        projectId: 12
+    });
+
+    // The default-on return logic is present; explicit `return: false` in the
+    // serialized data keeps the branch permanent because `false !== false` is false.
+    assert.match(html, /if \(choice\.return !== false\)/);
+    assert.match(html, /"return":false/);
+});

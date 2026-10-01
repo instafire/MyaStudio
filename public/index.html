@@ -2194,7 +2194,7 @@
                                     <div class="flex-1"><span class="text-[8px] uppercase text-rose-400/80 font-bold">Req</span><input v-model="opt.reqVar" aria-label="Variable required by this choice" placeholder="var" class="glass-input w-full p-1 text-[10px]"></div>
                                 </div>
                             </div>
-                            <button type="button" v-if="eventChoices.length < 4" @click="eventChoices.push({label:'', toId:null, color:'#ffffff', returnToMain:false, setVar:'', reqVar:'', actionType:'target'})" class="w-full border-2 border-dashed border-white/10 rounded-xl py-3 text-slate-500 hover:text-blue-300 hover:border-blue-500/40 transition text-[11px] font-semibold">+ Add choice</button>
+                            <button type="button" v-if="eventChoices.length < 4" @click="eventChoices.push({label:'', toId:null, color:'#ffffff', returnToMain:true, setVar:'', reqVar:'', actionType:'target'})" class="w-full border-2 border-dashed border-white/10 rounded-xl py-3 text-slate-500 hover:text-blue-300 hover:border-blue-500/40 transition text-[11px] font-semibold">+ Add choice</button>
                         </div>
                     </div>
                 </div>
@@ -3245,7 +3245,7 @@
                 view: 'projects', projects: [], currentProject: null,
                 videos: [], clips: [], edges: [], audioFiles: [], uploading: false, selectedFile: null, selectedVidId: null, videoUrl: '', currentVidDuration: 0, currentTime: 0, clipStart: 0, clipEnd: 0, clipName: '', clipFilter: 'none', clipSpeed: 1, clipVolume: 1,
                 // Event Clips
-eventChoices: [{label:'', toId:null, color:'#ffffff', returnToMain:false, setVar:'', reqVar:'', actionType:'target'}],
+eventChoices: [{label:'', toId:null, color:'#ffffff', returnToMain:true, setVar:'', reqVar:'', actionType:'target'}],
                 previewEventClip: null, showTestChoices: false, testChoices: [], testHistory: [], testIsReturning: false,
                 isEditingEvent: false, editingEventId: null, showEventEditor: false,
 
@@ -3812,8 +3812,8 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                     this.isProcessing = false;
                 }
             },
-            makeChoiceDraft() { return { label:'', toId:null, color:'#ffffff', returnToMain:false, setVar:'', reqVar:'', actionType:'target' }; },
-            makeLogicChoiceDraft() { return { toId:null, label:'', color:'#ffffff', return:false, setVar:'', reqVar:'', actionType:'target' }; },
+            makeChoiceDraft() { return { label:'', toId:null, color:'#ffffff', returnToMain:true, setVar:'', reqVar:'', actionType:'target' }; },
+            makeLogicChoiceDraft() { return { toId:null, label:'', color:'#ffffff', return:true, setVar:'', reqVar:'', actionType:'target' }; },
             getChoiceActionLabel(actionType) {
                 const action = actionType || 'target';
                 if (action === 'next') return 'Next scene';
@@ -4404,7 +4404,7 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                             toId: node.unique_id,
                             label: node.name || `Choice ${nextNumber}`,
                             color: '#ffffff',
-                            returnToMain: false,
+                            returnToMain: true,
                             setVar: '',
                             reqVar: '',
                             actionType: 'target'
@@ -5079,7 +5079,7 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                     }
                     const targetClip = this.clips.find(c => c.unique_id === opt.toId); 
                     if(targetClip) { 
-                        if(opt.return) { this.historyStack.push({ time: this.$refs.logicPlayer.currentTime + 0.5, src: this.$refs.logicPlayer.src }); } 
+                        if(opt.return !== false) { this.historyStack.push({ time: this.$refs.logicPlayer.currentTime + 0.5, src: this.$refs.logicPlayer.src }); } 
                         this.$refs.logicPlayer.src = targetClip.filepath; this.$refs.logicPlayer.muted = !!targetClip.mute_audio; this.$refs.logicPlayer.play(); this.playPreviewMusic(targetClip.bg_music);
                         this.showLogicOverlay = false; this.isPlayingSubClip = true; 
                     } 
@@ -5677,8 +5677,9 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 }
                 const targetClip = this.clips.find(c => c.unique_id === choice.to);
                 if(targetClip) {
-                    // Logic from stable server.js:
-                    if(choice.return) {
+                    // Return branches are the default: the preview resumes from the
+                    // trigger moment when the choice clip ends. return === false = permanent branch.
+                    if (choice.return !== false) {
                         if (this.previewClip && this.previewClip.is_event_clip === 1) {
                             // EVENT CLIP LOGIC: Return to START (0)
                             this.previewHistoryStack.push({
