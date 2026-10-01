@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700;800&display=swap" rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/vendor/tailwind-play.js"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -1916,6 +1916,7 @@
                         <p class="page-subtitle mt-2">Import footage, cut reusable scenes, place timed choices, and preview every return path before you publish.</p>
                         <div class="flex flex-wrap gap-2 mt-5">
                             <button type="button" @click="createProject" class="btn-primary px-5 py-2.5 text-sm">New interactive movie</button>
+                            <button type="button" @click="createSampleProject" :disabled="sampleBuilding" class="glass-btn px-4 py-2.5 text-sm font-semibold disabled:opacity-50">{{ sampleBuilding ? 'Building sample…' : 'Try a sample story' }}</button>
                             <button type="button" @click="importProject" class="glass-btn px-4 py-2.5 text-sm font-semibold">Import JSON</button>
                             <button type="button" @click="showCommandPalette = true" class="glass-btn px-4 py-2.5 text-sm font-semibold">Search actions</button>
                             <input type="file" ref="importFileInput" class="hidden" accept=".json" @change="handleImportFile">
@@ -3275,7 +3276,7 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 showAiModal: false, aiGenerating: false, aiOutline: null, aiPremise: '', aiGenre: 'Mystery', aiTargetScenes: 7, aiTone: 'cinematic', aiValidation: null,
                 aiAgentInventory: null, aiAgentPlan: null, aiAgentMode: '', aiAgentWarning: '', aiAgentStage: '', aiReplaceExisting: false, aiRenameProject: false,
                 lastGifUrl: '', gifFps: 10, gifWidth: 400, editorPlaying: { video: false, event: false },
-                showCommandPalette: false, commandQuery: '', commandIndex: 0, showShortcuts: false,
+                showCommandPalette: false, commandQuery: '', commandIndex: 0, showShortcuts: false, sampleBuilding: false,
                 projectSearch: '', projectSort: 'newest',
                 libraryShowFavoritesOnly: false, librarySort: 'name',
                 loopSelection: false, snapPlayhead: true, editorPlaybackRate: 1, editorMarkers: [],
@@ -4040,6 +4041,25 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                     await this.fetchProjects();
                 } catch (err) {
                     this.showToast(err.message || 'Could not create project', 'error');
+                }
+            },
+            async createSampleProject() {
+                if (this.sampleBuilding) return;
+                this.sampleBuilding = true;
+                try {
+                    const data = await this.requestJson('/api/projects/sample', {
+                        method: 'POST',
+                        headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({})
+                    }, 'Could not build sample story');
+                    await this.fetchProjects();
+                    const project = this.projects.find(p => p.id === data.projectId);
+                    if (project) await this.selectProject(project);
+                    this.showToast('Sample story ready — pick a door!');
+                } catch (err) {
+                    this.showToast(err.message || 'Could not build sample story', 'error');
+                } finally {
+                    this.sampleBuilding = false;
                 }
             },
             async exportProject(project) {
@@ -4912,12 +4932,15 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 }
                 this.showToast("ID Copied!");
             },
-            testEventClip(clip) {
+            async testEventClip(clip) {
                 this.stopAllChoiceHoverPreviews();
-                this.previewEventClip = clip;
+                // Refresh first so the playtest always uses the latest saved choices.
+                await this.refreshData();
+                const fresh = this.clips.find(c => c.unique_id === clip.unique_id) || clip;
+                this.previewEventClip = fresh;
                 this.testHistory = [];
                 this.showTestChoices = false;
-                this.testChoices = this.edges.filter(e => e.from_id === clip.unique_id);
+                this.testChoices = this.edges.filter(e => e.from_id === fresh.unique_id);
                 this.testIsReturning = false;
             },
             closeTestEvent() { this.stopAllChoiceHoverPreviews(); this.previewEventClip = null; this.testHistory = []; },
@@ -5217,7 +5240,6 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                             fromId: this.logicSourceId,
                             logicId: this.currentEditingBlock.id,
                             triggerTime: this.currentEditingBlock.triggerTime,
-                            returnToMain: this.currentEditingBlock.returnToMain,
                             choices: this.currentEditingBlock.choices,
                             bgMusic: this.logicBgMusic,
                             muteAudio: this.logicMuteVideo

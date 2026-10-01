@@ -185,6 +185,7 @@ function buildDuplicateClipTitle(title, existingTitles = []) {
     return candidate;
 }
 
+const { execFile } = require('child_process');
 const generateThumbnail = (inputPath, filename, timestamp = '20%') => {
     return new Promise((resolve) => {
         const thumbFilename = filename.replace(path.extname(filename), '') + `_${Date.now()}.jpg`;
@@ -1164,6 +1165,72 @@ app.post('/api/projects', async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         sendApiError(res, err, 'Could not create project');
+    }
+});
+
+// One-click sample story: generates three tiny ffmpeg clips and wires a
+// two-choice branching demo so new users can try the editor instantly.
+app.post('/api/projects/sample', async (req, res) => {
+    const createdFiles = [];
+    try {
+        ensureDbReady();
+        const title = String((req.body && req.body.title) || 'Sample: The Two Doors').slice(0, 80) || 'Sample: The Two Doors';
+        const projectResult = await db.run(
+            'INSERT INTO projects (title, genre, synopsis) VALUES (?, ?, ?)',
+            [title, 'Interactive story', 'A tiny generated demo: stand in the hallway and pick a door.']
+        );
+        const projectId = projectResult.lastID;
+
+        const scenes = [
+            { name: 'The Hallway', hue: 210, dur: 6 },
+            { name: 'The Red Door', hue: 350, dur: 5 },
+            { name: 'The Garden', hue: 110, dur: 5 }
+        ];
+        const clipIds = [];
+        let x = 120;
+        for (const scene of scenes) {
+            const clipId = uuidv4();
+            const filename = `sample_${clipId}.mp4`;
+            const outPath = path.join(__dirname, 'public/clips', filename);
+            // NOTE: built with execFile (not fluent-ffmpeg) because fluent-ffmpeg's
+            // capability check misparses newer ffmpeg `-formats` output and
+            // wrongly rejects the lavfi input format.
+            await new Promise((resolve, reject) => {
+                execFile(ffmpegStatic, [
+                    '-hide_banner', '-loglevel', 'error',
+                    '-f', 'lavfi', '-i', `testsrc2=s=1280x720:d=${scene.dur}:r=30`,
+                    '-vf', `hue=h=${scene.hue}`,
+                    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+                    '-y', outPath
+                ], (err) => err ? reject(err) : resolve());
+            });
+            createdFiles.push(outPath);
+            const thumbnail = await generateThumbnail(outPath, filename);
+            const webPath = `/clips/${filename}`;
+            await db.run(
+                'INSERT INTO clips (unique_id, project_id, name, filepath, thumbnail, source_video_id, duration, start_time, end_time, x, y, builder_visible) VALUES (?, ?, ?, ?, ?, NULL, ?, 0, ?, ?, 220, 1)',
+                [clipId, projectId, scene.name, webPath, thumbnail, scene.dur, scene.dur, x]
+            );
+            clipIds.push(clipId);
+            x += 420;
+        }
+
+        const logicId = uuidv4();
+        const choices = [
+            { label: 'Open the red door', to: clipIds[1] },
+            { label: 'Enter the garden', to: clipIds[2] }
+        ];
+        for (const choice of choices) {
+            await db.run(
+                'INSERT INTO edges (project_id, from_id, to_id, label, text_color, trigger_time, logic_id, return_to_main, set_var, req_var, action_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [projectId, clipIds[0], choice.to, choice.label, '#ffffff', 4.0, logicId, 1, '', '', 'target']
+            );
+        }
+        await db.run('UPDATE projects SET start_clip_id = ? WHERE id = ?', [clipIds[0], projectId]);
+        res.json({ success: true, projectId });
+    } catch (err) {
+        for (const f of createdFiles) { try { await fs.unlink(f); } catch (e) {} }
+        sendApiError(res, err, 'Could not build sample story');
     }
 });
 app.post('/api/project/duplicate', async (req, res) => {
