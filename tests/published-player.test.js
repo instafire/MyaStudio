@@ -113,9 +113,57 @@ test('published player exposes accessible choices, keyboard shortcuts, and a rep
 
     assert.match(html, /role="dialog" aria-modal="true" aria-labelledby="choice-heading"/);
     assert.match(html, /What happens next\?/);
-    assert.match(html, /handleChoiceKey/);
+    assert.match(html, /handleKey/);
     assert.match(html, /Replay from the beginning/);
     assert.match(html, /Math\.max\(0, Math\.min/);
+});
+
+test('published player ships playback controls, shortcuts overlay, journey recap, loading spinner, and back-to-decision', () => {
+    const html = buildPublishedPlayerHtml({
+        safeTitle: 'Controls Test',
+        themeColor: '#2563eb',
+        clips: [
+            {
+                unique_id: 'main',
+                name: 'Main story',
+                filepath: 'clips/main.mp4',
+                thumbnail: 'clips/main.jpg',
+                duration: 12,
+                mute_audio: 0,
+                is_event_clip: 0,
+                bg_music: null
+            }
+        ],
+        logicBlocks: [],
+        seq: [{ id: 'main', name: 'Main story', startTime: 0 }],
+        projectId: 7
+    });
+
+    // Playback controls
+    assert.match(html, /toggleMute/);
+    assert.match(html, /togglePlay/);
+    assert.match(html, /seekBy/);
+    assert.match(html, /changeVolume/);
+    assert.match(html, /copyLink/);
+    assert.match(html, /cycleSpeed/);
+    assert.match(html, /toggleFullscreen/);
+    // Keyboard shortcuts
+    assert.match(html, /showShortcuts/);
+    assert.match(html, /Keyboard shortcuts/);
+    assert.match(html, /key === '\?'/);
+    // Decision history + back button
+    assert.match(html, /decisionHistory/);
+    assert.match(html, /goBackToDecision/);
+    assert.match(html, /timeline-back/);
+    // Journey recap on the end screen
+    assert.match(html, /journeyLog/);
+    assert.match(html, /journey-list/);
+    assert.match(html, /endReason/);
+    // Loading indicator
+    assert.match(html, /class="loader"/);
+    assert.match(html, /isLoading/);
+    // Per-clip mute respects the user's mute choice
+    assert.match(html, /v\.muted = this\.userMuted/);
 });
 
 test('published player provides a seekable scene timeline and accessible decision markers', () => {
