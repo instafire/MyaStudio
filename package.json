@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test tests/published-player.test.js tests/movie-agent.test.js"
+    "test": "node --test tests/published-player.test.js tests/movie-agent.test.js tests/choice-timer.test.js"
   },
   "keywords": [
     "interactive-video",
