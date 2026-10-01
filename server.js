@@ -10,6 +10,7 @@ const ffmpegStatic = require('ffmpeg-static');
 const ffprobeStatic = require('ffprobe-static');
 const multer = require('multer');
 const { buildPublishedPlayerHtml, collectReachableClipIds } = require('./lib/published-player');
+const { srtToVtt, looksLikeValidCues } = require('./lib/subtitles');
 const {
     buildFallbackMoviePlan,
     buildMovieAgentPrompt,
@@ -71,7 +72,7 @@ feedApp.use((req, res, next) => {
 feedApp.use(express.static(path.join(__dirname, 'public', 'feed')));
 
 // 1. SETUP FOLDERS
-const folders = ['videos', 'clips', 'thumbnails', 'exports', 'audio', 'gifs'];
+const folders = ['videos', 'clips', 'thumbnails', 'exports', 'audio', 'gifs', 'subtitles'];
 folders.forEach(f => fs.ensureDirSync(path.join(__dirname, 'public', f)));
 
 // 2. DATABASE INIT
@@ -100,7 +101,11 @@ let db;
         `ALTER TABLE clips ADD COLUMN favorite INTEGER DEFAULT 0`,
         `ALTER TABLE clips ADD COLUMN tags TEXT DEFAULT ''`,
         `ALTER TABLE clips ADD COLUMN notes TEXT DEFAULT ''`,
-        `ALTER TABLE clips ADD COLUMN markers TEXT DEFAULT '[]'`
+        `ALTER TABLE clips ADD COLUMN markers TEXT DEFAULT '[]'`,
+        `ALTER TABLE edges ADD COLUMN time_limit REAL`,
+        `ALTER TABLE edges ADD COLUMN is_default INTEGER DEFAULT 0`,
+        `ALTER TABLE edges ADD COLUMN shuffle_choices INTEGER DEFAULT 0`,
+        `ALTER TABLE clips ADD COLUMN subtitle_path TEXT`
     ];
     for(let m of migrations) { try { await db.exec(m); } catch(e){} }
     await reconcileMediaRecords();
@@ -121,6 +126,19 @@ const storage = multer.diskStorage({
 const upload = multer({
     storage,
     limits: { fileSize: 1024 * 1024 * 800 }
+});
+const subtitleStorage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, path.join(__dirname, 'public', 'subtitles')),
+    filename: (req, file, cb) => cb(null, Date.now() + '.vtt')
+});
+const subtitleUpload = multer({
+    storage: subtitleStorage,
+    limits: { fileSize: 1024 * 512 },
+    fileFilter: (req, file, cb) => {
+        const ext = path.extname(file.originalname || '').toLowerCase();
+        if (ext === '.vtt' || ext === '.srt') return cb(null, true);
+        cb(createHttpError('Only .vtt and .srt subtitle files are accepted', 400));
+    }
 });
 
 function ensureDbReady() {
@@ -2017,6 +2035,48 @@ app.post('/api/clip/audio', async (req, res) => {
     }
 });
 
+app.post('/api/clip/subtitle', subtitleUpload.single('file'), async (req, res) => {
+    try {
+        ensureDbReady();
+        const body = req.body || {};
+        const safeProjectId = parseRequiredId(body.projectId, 'projectId');
+        const clipId = parseUniqueId(body.unique_id);
+        const existing = await db.get('SELECT * FROM clips WHERE unique_id = ? AND project_id = ?', [clipId, safeProjectId]);
+        if (!existing) { if (req.file) await fs.remove(req.file.path).catch(() => {}); return res.status(404).json({ error: 'Clip not found' }); }
+        if (!req.file) return res.status(400).json({ error: 'No subtitle file uploaded' });
+        const raw = await fs.readFile(req.file.path, 'utf8').catch(() => '');
+        const vtt = srtToVtt(raw);
+        if (!looksLikeValidCues(vtt)) {
+            await fs.remove(req.file.path).catch(() => {});
+            return res.status(400).json({ error: 'Subtitle file has no valid cues' });
+        }
+        await fs.writeFile(req.file.path, vtt, 'utf8');
+        if (existing.subtitle_path) await fs.remove(path.join(__dirname, 'public', existing.subtitle_path)).catch(() => {});
+        const webPath = `/subtitles/${path.basename(req.file.path)}`;
+        await db.run('UPDATE clips SET subtitle_path = ? WHERE unique_id = ? AND project_id = ?', [webPath, clipId, safeProjectId]);
+        res.json({ success: true, path: webPath });
+    } catch (err) {
+        if (req.file) await fs.remove(req.file.path).catch(() => {});
+        sendApiError(res, err, 'Subtitle upload failed');
+    }
+});
+
+app.post('/api/clip/subtitle/delete', async (req, res) => {
+    try {
+        ensureDbReady();
+        const body = req.body || {};
+        const safeProjectId = parseRequiredId(body.projectId, 'projectId');
+        const clipId = parseUniqueId(body.unique_id);
+        const existing = await db.get('SELECT * FROM clips WHERE unique_id = ? AND project_id = ?', [clipId, safeProjectId]);
+        if (!existing) return res.status(404).json({ error: 'Clip not found' });
+        if (existing.subtitle_path) await fs.remove(path.join(__dirname, 'public', existing.subtitle_path)).catch(() => {});
+        await db.run('UPDATE clips SET subtitle_path = NULL WHERE unique_id = ? AND project_id = ?', [clipId, safeProjectId]);
+        res.json({ success: true });
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
 app.get('/api/story', async (req, res) => { 
     try {
         ensureDbReady();
@@ -2033,7 +2093,7 @@ app.get('/api/story', async (req, res) => {
 });
 
 app.post('/api/save_logic_block', async (req, res) => {
-    const { projectId, fromId, logicId, triggerTime, choices, bgMusic, muteAudio } = req.body;
+    const { projectId, fromId, logicId, triggerTime, choices, bgMusic, muteAudio, timeLimit, shuffleChoices } = req.body;
     try {
         ensureDbReady();
         const safeProjectId = parseRequiredId(projectId, 'projectId');
@@ -2047,6 +2107,8 @@ app.post('/api/save_logic_block', async (req, res) => {
         if (!clip) return res.status(404).json({ error: 'Source clip not found' });
         const newLogicId = String(logicId || '').trim() || uuidv4();
         const safeTriggerTime = Math.max(0, toFiniteNumber(triggerTime, 0));
+        const safeTimeLimit = timeLimit === undefined || timeLimit === null || timeLimit === '' ? null : Math.max(0, toFiniteNumber(timeLimit, 0));
+        const safeShuffle = shuffleChoices ? 1 : 0;
         const safeChoices = Array.isArray(choices) ? choices : [];
         await db.run('UPDATE clips SET bg_music = ?, mute_audio = ? WHERE unique_id = ? AND project_id = ?', [normalizedBgMusic || null, muteAudio ? 1 : 0, safeFromId, safeProjectId]);
         if (logicId) await db.run('DELETE FROM edges WHERE project_id = ? AND logic_id = ?', [safeProjectId, logicId]);
@@ -2054,8 +2116,8 @@ app.post('/api/save_logic_block', async (req, res) => {
             const actionType = normalizeActionType(choice);
             const targetId = normalizeChoiceTargetId(choice);
             if (actionType === 'target' && !targetId) continue;
-            await db.run('INSERT INTO edges (project_id, from_id, to_id, label, text_color, trigger_time, logic_id, return_to_main, set_var, req_var, action_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', 
-            [safeProjectId, safeFromId, actionType === 'target' ? targetId : null, choice.label || 'Choice', choice.color || '#ffffff', safeTriggerTime, newLogicId, actionType === 'target' && choice.return ? 1 : 0, choice.setVar, choice.reqVar, actionType]); 
+            await db.run('INSERT INTO edges (project_id, from_id, to_id, label, text_color, trigger_time, logic_id, return_to_main, set_var, req_var, action_type, time_limit, is_default, shuffle_choices) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', 
+            [safeProjectId, safeFromId, actionType === 'target' ? targetId : null, choice.label || 'Choice', choice.color || '#ffffff', safeTriggerTime, newLogicId, actionType === 'target' && choice.return ? 1 : 0, choice.setVar, choice.reqVar, actionType, safeTimeLimit, choice.isDefault ? 1 : 0, safeShuffle]); 
         }
         res.json({ success: true });
     } catch (err) {
@@ -2892,6 +2954,7 @@ app.post('/api/publish', async (req, res) => {
             if(await fs.pathExists(src)) { await fs.copy(src, dest); clip.filepath = `clips/${filename}`; }
             if(clip.thumbnail) { const thumbName = path.basename(clip.thumbnail); if(await fs.pathExists(path.join(__dirname, 'public', clip.thumbnail))) { await fs.copy(path.join(__dirname, 'public', clip.thumbnail), path.join(exportPath, 'clips', thumbName)); clip.thumbnail = `clips/${thumbName}`; } }
             if(clip.bg_music) { const audSrc = path.join(__dirname, 'public', clip.bg_music); const audName = path.basename(clip.bg_music); if(await fs.pathExists(audSrc)) { await fs.copy(audSrc, path.join(exportPath, 'audio', audName)); clip.bg_music = `audio/${audName}`; } }
+            if(clip.subtitle_path) { const subSrc = path.join(__dirname, 'public', clip.subtitle_path); const subName = path.basename(clip.subtitle_path); if(await fs.pathExists(subSrc)) { await fs.copy(subSrc, path.join(exportPath, 'clips', subName)); clip.subtitle = `clips/${subName}`; } }
         }
 
         const logicBlocks = {};
@@ -2900,7 +2963,7 @@ app.post('/api/publish', async (req, res) => {
                 ? e.logic_id
                 : ('legacy_' + e.from_id + '_' + e.trigger_time);
             if (!logicBlocks[blockKey]) {
-                logicBlocks[blockKey] = { id: blockKey, from: e.from_id, time: e.trigger_time, choices: [] };
+                logicBlocks[blockKey] = { id: blockKey, from: e.from_id, time: e.trigger_time, timeLimit: e.time_limit || 0, shuffle: !!e.shuffle_choices, choices: [] };
             }
             logicBlocks[blockKey].choices.push({
                 to: e.to_id,
@@ -2909,7 +2972,8 @@ app.post('/api/publish', async (req, res) => {
                 return: !!e.return_to_main,
                 action: e.action_type || 'target',
                 setVar: e.set_var,
-                reqVar: e.req_var
+                reqVar: e.req_var,
+                isDefault: !!e.is_default
             });
         });
 

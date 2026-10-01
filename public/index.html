@@ -2325,6 +2325,15 @@
                         <label class="sidebar-head text-slate-500 text-[9px]">Notes</label>
                         <input v-model="librarySelectedClip.notes" aria-label="Clip notes" @change="saveClipMeta(librarySelectedClip)" class="glass-input w-full mt-1 px-2 py-1.5 text-[11px]" placeholder="Director notes...">
                     </div>
+                    <div>
+                        <label class="sidebar-head text-slate-500 text-[9px]">Subtitles (.vtt / .srt)</label>
+                        <div class="flex items-center gap-2 mt-1">
+                            <span v-if="librarySelectedClip.subtitle_path" class="text-[10px] text-emerald-400 truncate flex-1">✓ {{ librarySelectedClip.subtitle_path.split('/').pop() }}</span>
+                            <span v-else class="text-[10px] text-slate-600 flex-1">No captions yet</span>
+                            <label class="transport-btn cursor-pointer">Upload<input type="file" accept=".vtt,.srt" class="hidden" @change="uploadSubtitle"></label>
+                            <button v-if="librarySelectedClip.subtitle_path" type="button" @click="removeSubtitle" class="transport-btn" style="color:#fca5a5">Remove</button>
+                        </div>
+                    </div>
                 </div>
                 <div v-if="showReencode" class="px-3 py-2 border-b border-white/5 bg-black/25">
                     <div class="flex flex-wrap gap-2 items-center">
@@ -2339,7 +2348,9 @@
                 <div v-if="lastGifUrl" class="px-3 py-2"><div class="gif-result-banner"><span>GIF ready</span><a :href="lastGifUrl" target="_blank" rel="noopener">Open</a><a :href="lastGifUrl" download>Download</a><button type="button" class="transport-btn" @click="lastGifUrl=''">Dismiss</button></div></div>
                 <div class="cinema-stage player-stage-shell flex-1 rounded-none overflow-hidden relative flex flex-col min-h-0" :class="playerStageClass()">
                     <div class="cinema-stage__screen flex-1">
-                        <video ref="libraryPlayer" :src="librarySelectedClip.filepath" class="player-video" :class="playerVideoClass()" controls playsinline webkit-playsinline></video>
+                        <video ref="libraryPlayer" :src="librarySelectedClip.filepath" class="player-video" :class="playerVideoClass()" controls playsinline webkit-playsinline>
+                            <track v-if="librarySelectedClip.subtitle_path" :src="librarySelectedClip.subtitle_path" kind="subtitles" srclang="en" label="English">
+                        </video>
                     </div>
                 </div>
             </div>
@@ -2653,6 +2664,10 @@
                     <div v-else class="empty-state py-12"><div class="empty-state-icon">🔀</div><p class="text-slate-400 font-medium">Pick a scene</p><p class="text-sm text-slate-600 mt-1">Then add choice moments on the timeline below.</p></div>
                     
                     <div v-if="showLogicOverlay && currentEditingBlock" class="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col justify-end pb-10 z-10 animate-fade-in overflow-y-auto app-scroll">
+                        <div v-if="previewTimeLeft !== null" class="mx-auto mb-4 w-full max-w-md px-10">
+                            <div class="flex justify-between text-[10px] text-amber-300 font-semibold mb-1"><span>Choosing{{ (currentEditingBlock.choices.find(o => o.isDefault) || {}).label ? ' "' + (currentEditingBlock.choices.find(o => o.isDefault) || {}).label + '"' : '' }}…</span><span>{{ previewTimeLeft.toFixed(1) }}s</span></div>
+                            <div class="h-1.5 rounded-full bg-white/10 overflow-hidden"><div class="h-full bg-amber-400 rounded-full transition-all duration-100" :style="{ width: (currentEditingBlock.timeLimit > 0 ? (previewTimeLeft / currentEditingBlock.timeLimit * 100) : 0) + '%' }"></div></div>
+                        </div>
                         <div class="flex flex-wrap gap-8 justify-center px-10">
                              <button type="button" v-for="(opt, idx) in currentEditingBlock.choices" :key="idx" @click="handleOptionClick(opt)" class="choice-card-overlay is-preview w-full max-w-[17rem] sm:w-72 group text-left" @mouseenter="startChoiceHoverPreview('logic', idx)" @mouseleave="stopChoiceHoverPreview('logic', idx)" @focus="startChoiceHoverPreview('logic', idx)" @blur="stopChoiceHoverPreview('logic', idx)">
                                 <div class="choice-card-media-shell">
@@ -2687,6 +2702,8 @@
                             <div class="flex justify-between items-center mb-3 border-b border-white/5 pb-2">
                                 <h3 class="font-bold text-white text-sm">Choices at <span class="text-blue-400">{{ formatDuration(currentEditingBlock.triggerTime) }}</span></h3>
                                 <div class="flex gap-4 items-center">
+                                    <label class="text-[10px] text-slate-400 flex items-center gap-1.5 cursor-pointer" title="Countdown shown on these choices. 0 = no timer."><span class="uppercase tracking-wide">Timer</span><input type="number" v-model.number="currentEditingBlock.timeLimit" min="0" max="120" step="1" class="glass-input w-14 p-1 rounded text-[10px]"><span class="text-slate-600">s</span></label>
+                                    <label class="text-[10px] text-slate-400 flex items-center gap-1.5 cursor-pointer" title="Randomize choice order every viewing"><input type="checkbox" v-model="currentEditingBlock.shuffleChoices" class="rounded border-slate-600 text-sky-500"> Shuffle</label>
                                     <button type="button" @click="deleteLogicBlock" class="text-red-400 text-xs font-semibold hover:text-white px-3 py-1 rounded-lg hover:bg-red-500/15">Delete block</button>
                                 </div>
                             </div>
@@ -2701,6 +2718,7 @@
                                     <div v-if="(opt.actionType || 'target') === 'target'" class="flex gap-2"><div class="w-10 h-8 bg-black rounded flex-shrink-0 relative overflow-hidden"><img v-if="getClipThumb(opt.toId)" :src="getClipThumb(opt.toId)" class="w-full h-full object-cover" alt=""></div><select v-model="opt.toId" class="glass-input flex-1 p-1 rounded text-[10px]"><option :value="null">Target...</option><optgroup label="Choice scenes"><option v-for="c in eventClips" :value="c.unique_id">{{ c.name }}</option></optgroup><optgroup label="Standard clips"><option v-for="c in subClips" :value="c.unique_id">{{ c.name }}</option></optgroup></select></div>
                                     <div v-if="(opt.actionType || 'target') === 'target'" class="flex items-center gap-2 mt-2">
                                         <label class="text-[9px] text-yellow-400 flex items-center gap-1 cursor-pointer"><input type="checkbox" v-model="opt.return"> Return</label>
+                                        <label class="text-[9px] text-sky-400 flex items-center gap-1 cursor-pointer" title="Auto-picked when the timer runs out"><input type="radio" :checked="!!opt.isDefault" @change="setDefaultChoice(idx)" class="accent-sky-500"> Default</label>
                                     </div>
                                     <div v-else class="text-[10px] text-slate-500 mt-2">{{ (opt.actionType || 'target') === 'end' ? 'This creates a dead-end ending.' : 'This jumps to the next scene in the movie sequence.' }}</div>
                                     <div class="grid grid-cols-2 gap-2 mt-2">
@@ -2825,9 +2843,20 @@
                             <button type="button" @click="publishProject" class="glass-btn py-3 text-sm font-semibold" :disabled="publishing || effectiveStorySequence().length === 0">{{ publishing ? 'Building...' : 'Build & publish' }}</button>
                         </div>
                         <div class="text-[11px] text-slate-500 mt-3"><span class="kbd">Esc</span> closes the preview overlay.</div>
-                        <div v-if="publishUrl" class="mt-4 p-4 bg-emerald-950/30 border border-emerald-500/35 rounded-xl text-center space-y-2">
+                        <div v-if="publishUrl" class="mt-4 p-4 bg-emerald-950/30 border border-emerald-500/35 rounded-xl text-center space-y-3">
                             <a :href="publishUrl" target="_blank" rel="noopener" class="block text-white font-medium underline decoration-emerald-500/50 hover:text-emerald-200">Open published movie</a>
                             <a v-if="feedUrl" :href="feedUrl" target="_blank" rel="noopener" class="block text-xs text-emerald-100/90 underline decoration-emerald-500/30 hover:text-white">Open live feed</a>
+                            <div class="flex items-center gap-2">
+                                <input :value="absolutePublishUrl" readonly aria-label="Published movie link" class="glass-input flex-1 min-w-0 px-3 py-1.5 text-[11px] font-mono" @focus="$event.target.select()">
+                                <button type="button" @click="copyPublishLink" class="glass-btn px-3 py-1.5 text-[11px] font-semibold shrink-0">{{ linkCopied ? 'Copied!' : 'Copy link' }}</button>
+                            </div>
+                            <div class="text-left">
+                                <div class="text-[10px] uppercase tracking-wide text-slate-400 mb-1">Embed on your site</div>
+                                <div class="flex items-start gap-2">
+                                    <textarea :value="embedSnippet" readonly rows="2" aria-label="Embed snippet" class="glass-input flex-1 min-w-0 px-3 py-1.5 text-[10px] font-mono resize-none" @focus="$event.target.select()"></textarea>
+                                    <button type="button" @click="copyEmbedSnippet" class="glass-btn px-3 py-1.5 text-[11px] font-semibold shrink-0">{{ embedCopied ? 'Copied!' : 'Copy' }}</button>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -3196,14 +3225,33 @@
                     </div>
                 </div>
                 <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" class="transport-btn" :class="showPreviewVars ? 'is-active' : ''" @click="showPreviewVars = !showPreviewVars" title="Inspect and edit story variables">Vars{{ Object.keys(previewGameState).length ? ' (' + Object.keys(previewGameState).length + ')' : '' }}</button>
                     <button type="button" class="transport-btn" @click="closePreview">Close</button>
                 </div>
             </div>
+            <div v-if="showPreviewVars" class="mx-3 mt-2 p-3 rounded-xl bg-black/60 border border-white/10 backdrop-blur-md z-40">
+                <div class="text-[10px] uppercase tracking-wide text-slate-400 mb-2">Story variables</div>
+                <div v-if="Object.keys(previewGameState).length === 0" class="text-[11px] text-slate-500 mb-2">No variables set yet — pick a choice with a "Set Var" to see it here.</div>
+                <div class="flex flex-wrap gap-1.5 mb-2">
+                    <span v-for="(val, key) in previewGameState" :key="key" class="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-[11px] text-emerald-200 font-mono">{{ key }}<button type="button" @click="removePreviewVar(key)" class="text-emerald-400/70 hover:text-red-300 font-bold" title="Clear variable">✕</button></span>
+                </div>
+                <div class="flex gap-2">
+                    <input v-model="newPreviewVar" @keyup.enter="addPreviewVar" placeholder="variable_name" aria-label="New variable name" class="glass-input flex-1 min-w-0 px-2 py-1.5 text-[11px] font-mono">
+                    <button type="button" @click="addPreviewVar" class="transport-btn">Set</button>
+                    <button v-if="Object.keys(previewGameState).length" type="button" @click="clearPreviewVars" class="transport-btn" style="color:#fca5a5">Clear all</button>
+                </div>
+            </div>
             <div class="preview-stage flex-1 relative flex items-center justify-center overflow-hidden" :class="{ faded: previewFading }">
-                <video ref="previewPlayer" class="player-video" :class="playerVideoClass()" @timeupdate="onPreviewTimeUpdate" @ended="onPreviewEnded" playsinline webkit-playsinline></video>
+                <video ref="previewPlayer" class="player-video" :class="playerVideoClass()" @timeupdate="onPreviewTimeUpdate" @ended="onPreviewEnded" playsinline webkit-playsinline>
+                    <track v-if="previewClip && previewClip.subtitle_path" :src="previewClip.subtitle_path" kind="subtitles" srclang="en" label="English" default>
+                </video>
                 <audio ref="previewBgm" loop></audio>
                 <div v-if="previewShowChoices" class="absolute inset-0 bg-black/78 backdrop-blur-md flex flex-col justify-center items-center z-50 px-4 animate-fade-in overflow-y-auto app-scroll">
                     <div class="preview-choice-header text-white mb-5 text-center">What happens next?</div>
+                    <div v-if="previewChoiceTimeLeft !== null && previewCurrentOptions" class="w-full max-w-md mb-4 px-4">
+                        <div class="flex justify-between text-[10px] text-amber-300 font-semibold mb-1"><span>Auto-picking{{ (previewCurrentChoices.find(c => c.isDefault) || {}).label ? ' "' + (previewCurrentChoices.find(c => c.isDefault) || {}).label + '"' : '' }}…</span><span>{{ previewChoiceTimeLeft.toFixed(1) }}s</span></div>
+                        <div class="h-1.5 rounded-full bg-white/10 overflow-hidden"><div class="h-full bg-amber-400 rounded-full" :style="{ width: (previewCurrentOptions.timeLimit > 0 ? (previewChoiceTimeLeft / previewCurrentOptions.timeLimit * 100) : 0) + '%' }"></div></div>
+                    </div>
                     <div class="preview-choice-grid">
                         <button type="button" v-for="(ch, idx) in previewCurrentChoices" :key="(ch.to || ch.action || 'choice') + ch.label + idx" @click="makePreviewChoice(ch)" @mouseenter="startChoiceHoverPreview('preview', idx)" @mouseleave="stopChoiceHoverPreview('preview', idx)" @focus="startChoiceHoverPreview('preview', idx)" @blur="stopChoiceHoverPreview('preview', idx)" class="preview-card w-full max-w-[20rem] sm:w-72 md:w-80 group text-left" :class="{locked: isPreviewLocked(ch)}" :style="{borderColor: ch.color || 'rgba(255,255,255,0.2)'}">
                             <div class="choice-card-media-shell">
@@ -3264,13 +3312,13 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 // Library
                 librarySelectedClip: null, showReencode: false, reencodeFilter: 'none', reencodeSpeed: 1, reencodeVolume: 1, selectedClipIds: [], isSelecting: false,
                 // Stats & Publish
-                statsData: [], publishTitle: 'My Movie', storySequence: [], publishing: false, publishUrl: '', feedUrl: '', projectColor: '#3b82f6', dragSequenceIdx: null, mp4ExportPath: [], mp4Crossfade: true, mp4ExportUrl: '',
+                statsData: [], publishTitle: 'My Movie', storySequence: [], publishing: false, publishUrl: '', feedUrl: '', linkCopied: false, embedCopied: false, projectColor: '#3b82f6', dragSequenceIdx: null, mp4ExportPath: [], mp4Crossfade: true, mp4ExportUrl: '',
                 exportsList: [], 
                 // Full Preview Engine
-                previewMode: false, previewPlaylistIndex: 0, previewClip: null, previewActiveBlocks: [], previewCurrentOptions: null, previewShowChoices: false, previewHistoryStack: [], previewGameState: {}, previewIsPlayingSubClip: false, previewFading: false,
+                previewMode: false, previewPlaylistIndex: 0, previewClip: null, previewActiveBlocks: [], previewCurrentOptions: null, previewShowChoices: false, previewHistoryStack: [], previewGameState: {}, previewIsPlayingSubClip: false, previewFading: false, showPreviewVars: false, newPreviewVar: '', previewChoiceTimeLeft: null, previewChoiceTimerId: null,
                 // Advanced Editor
                 editorSourceId: null, editorClips: [], timelineZoom: 100, timelineScroll: 0, playheadTime: 0, snapEnabled: true, selectedTimelineClipId: null, timelineThumbnails: [], timelineWaveUrl: null, showClipList: true, showAdvProps: true, isDraggingPlayhead: false, isDraggingTrim: null,
-                positionHistory: [], isProcessing: false, _previewTimeoutFired: false, _toastTimer: null,
+                positionHistory: [], isProcessing: false, _previewTimeoutFired: false, _toastTimer: null, previewTimeLeft: null, previewTimerId: null,
                 toast: { show: false, msg: '', type: 'success' },
                 aiSettings: { provider: 'ollama', model: 'llama3.2:3b', apiKey: '', ollamaHost: 'http://127.0.0.1:11434' },
                 showAiModal: false, aiGenerating: false, aiOutline: null, aiPremise: '', aiGenre: 'Mystery', aiTargetScenes: 7, aiTone: 'cinematic', aiValidation: null,
@@ -3427,14 +3475,22 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 return warnings;
             },
             
-            existingLogicBlocks() {
-                if(!this.logicSourceId) return [];
+            absolutePublishUrl() {
+                if (!this.publishUrl) return '';
+                try { return new URL(this.publishUrl, window.location.origin).href; }
+                catch (e) { return this.publishUrl; }
+            },
+            embedSnippet() {
+                if (!this.absolutePublishUrl) return '';
+                return '<iframe src="' + this.absolutePublishUrl + '" width="960" height="540" frameborder="0" allowfullscreen allow="autoplay; fullscreen"></iframe>';
+            },
+            existingLogicBlocks() {                if(!this.logicSourceId) return [];
                 const myEdges = this.edges.filter(e => e.from_id === this.logicSourceId);
                 const blocks = {};
                 myEdges.forEach(e => {
                     const id = e.logic_id || 'legacy_'+e.trigger_time;
-                    if(!blocks[id]) blocks[id] = { id, triggerTime: e.trigger_time, choices: [] };
-                    blocks[id].choices.push({ toId: e.to_id, label: e.label, color: e.text_color, return: !!e.return_to_main, setVar: e.set_var, reqVar: e.req_var, actionType: e.action_type || 'target', thumbnail: e.thumbnail });
+                    if(!blocks[id]) blocks[id] = { id, triggerTime: e.trigger_time, timeLimit: e.time_limit || 0, shuffleChoices: !!e.shuffle_choices, choices: [] };
+                    blocks[id].choices.push({ toId: e.to_id, label: e.label, color: e.text_color, return: !!e.return_to_main, setVar: e.set_var, reqVar: e.req_var, actionType: e.action_type || 'target', thumbnail: e.thumbnail, isDefault: !!e.is_default });
                 });
                 return Object.values(blocks).sort((a,b) => a.triggerTime - b.triggerTime);
             },
@@ -3794,6 +3850,38 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                     this.showToast(err.message || 'Could not save', 'error');
                 }
             },
+            async uploadSubtitle(event) {
+                const file = event && event.target && event.target.files && event.target.files[0];
+                if (!file || !this.librarySelectedClip || !this.currentProject) return;
+                if (event.target) event.target.value = '';
+                const form = new FormData();
+                form.append('file', file);
+                form.append('projectId', this.currentProject.id);
+                form.append('unique_id', this.librarySelectedClip.unique_id);
+                try {
+                    const data = await this.requestJson('/api/clip/subtitle', { method: 'POST', body: form }, 'Subtitle upload failed');
+                    if (data && data.path) this.librarySelectedClip.subtitle_path = data.path;
+                    this.showToast('Captions added');
+                    await this.refreshData();
+                } catch (err) {
+                    this.showToast(err.message || 'Subtitle upload failed', 'error');
+                }
+            },
+            async removeSubtitle() {
+                if (!this.librarySelectedClip || !this.currentProject) return;
+                try {
+                    await this.requestJson('/api/clip/subtitle/delete', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ projectId: this.currentProject.id, unique_id: this.librarySelectedClip.unique_id })
+                    }, 'Could not remove captions');
+                    this.librarySelectedClip.subtitle_path = null;
+                    this.showToast('Captions removed');
+                    await this.refreshData();
+                } catch (err) {
+                    this.showToast(err.message || 'Could not remove captions', 'error');
+                }
+            },
             async splitSelectedClip() {
                 if (!this.librarySelectedClip || !this.currentProject) return;
                 const player = this.$refs.libraryPlayer;
@@ -3814,7 +3902,7 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 }
             },
             makeChoiceDraft() { return { label:'', toId:null, color:'#ffffff', returnToMain:true, setVar:'', reqVar:'', actionType:'target' }; },
-            makeLogicChoiceDraft() { return { toId:null, label:'', color:'#ffffff', return:true, setVar:'', reqVar:'', actionType:'target' }; },
+            makeLogicChoiceDraft() { return { toId:null, label:'', color:'#ffffff', return:true, setVar:'', reqVar:'', actionType:'target', isDefault:false }; },
             getChoiceActionLabel(actionType) {
                 const action = actionType || 'target';
                 if (action === 'next') return 'Next scene';
@@ -5064,17 +5152,18 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                     if(c) { this.logicBgMusic = c.bg_music; this.logicMuteVideo = !!c.mute_audio; this.logicTimeoutToId = c.timeout_to_id || null; this.logicTimeoutSeconds = Number(c.timeout_seconds) || 0; this.$nextTick(() => { if(this.$refs.logicPlayer) this.$refs.logicPlayer.muted = this.logicMuteVideo; this.playPreviewMusic(this.logicBgMusic); }); }
                 }
             },
-            toggleTestMode() { this.isTestMode = !this.isTestMode; this.showLogicOverlay = false; this.currentEditingBlock = null; },
+            toggleTestMode() { this.isTestMode = !this.isTestMode; this.showLogicOverlay = false; this.currentEditingBlock = null; this.clearPreviewTimer(); },
             playPreviewMusic(url) { const a = this.$refs.bgmPreview; if(!a) return; if(url) { a.src = url; a.volume = 0.3; a.play().catch(e=>{}); } else { a.pause(); } },
 
             updateLogicProgress() { 
                 const v = this.$refs.logicPlayer; if(!v) return; this.logicCurrentTime = v.currentTime;
                 if(this.isPlayingSubClip) return;
-                if(this.isTestMode && !this.showLogicOverlay) { const block = this.existingLogicBlocks.find(b => v.currentTime >= b.triggerTime && v.currentTime < b.triggerTime + 0.5); if(block) { v.pause(); this.currentEditingBlock = block; this.showLogicOverlay = true; } }
+                if(this.isTestMode && !this.showLogicOverlay) { const block = this.existingLogicBlocks.find(b => v.currentTime >= b.triggerTime && v.currentTime < b.triggerTime + 0.5); if(block) { v.pause(); this.currentEditingBlock = block; this.showLogicOverlay = true; this.startPreviewTimer(block); } }
                 else if(!this.isTestMode && this.currentEditingBlock && Math.abs(this.logicCurrentTime - this.currentEditingBlock.triggerTime) < 0.5) { this.showLogicOverlay = true; } 
                 else if (!this.isTestMode) { this.showLogicOverlay = false; }
             },
             handleOptionClick(opt) { 
+                this.clearPreviewTimer();
                 if(this.isTestMode) { 
                     this.stopAllChoiceHoverPreviews();
                     const action = opt.action || opt.actionType || 'target';
@@ -5108,6 +5197,22 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                     } 
                 } 
             },
+            startPreviewTimer(block) {
+                this.clearPreviewTimer();
+                const limit = Number(block && block.timeLimit) || 0;
+                if (limit <= 0) { this.previewTimeLeft = null; return; }
+                this.previewTimeLeft = limit;
+                this.previewTimerId = setInterval(() => {
+                    this.previewTimeLeft = Math.max(0, (this.previewTimeLeft || 0) - 0.1);
+                    if (this.previewTimeLeft <= 0) {
+                        this.clearPreviewTimer();
+                        const opts = (this.currentEditingBlock && this.currentEditingBlock.choices) || [];
+                        const pick = opts.find(o => o.isDefault) || opts[0];
+                        if (pick) this.handleOptionClick(pick);
+                    }
+                }, 100);
+            },
+            clearPreviewTimer() { if (this.previewTimerId) { clearInterval(this.previewTimerId); this.previewTimerId = null; } this.previewTimeLeft = null; },
             onLogicPlayerEnded() {
                 if (this.isPlayingSubClip && this.historyStack.length > 0) {
                     this.finishSubClip();
@@ -5119,9 +5224,10 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 if(this.logicSourceClip) { this.$refs.logicPlayer.muted = !!this.logicSourceClip.mute_audio; this.playPreviewMusic(this.logicSourceClip.bg_music); }
             },
             jumpTime(e) { if(!this.logicSourceClip) return; const rect = e.target.getBoundingClientRect(); this.$refs.logicPlayer.currentTime = ((e.clientX - rect.left)/rect.width)*this.logicSourceClip.duration; },
-            createNewBlockAtCurrentTime() { this.$refs.logicPlayer.pause(); this.currentEditingBlock = { id: null, triggerTime: this.$refs.logicPlayer.currentTime, choices: [this.makeLogicChoiceDraft(), this.makeLogicChoiceDraft()] }; this.showLogicOverlay = true; },
+            createNewBlockAtCurrentTime() { this.$refs.logicPlayer.pause(); this.currentEditingBlock = { id: null, triggerTime: this.$refs.logicPlayer.currentTime, timeLimit: 0, shuffleChoices: false, choices: [this.makeLogicChoiceDraft(), this.makeLogicChoiceDraft()] }; this.showLogicOverlay = true; },
             editBlock(block) { this.$refs.logicPlayer.pause(); this.$refs.logicPlayer.currentTime = block.triggerTime; this.currentEditingBlock = JSON.parse(JSON.stringify(block)); this.showLogicOverlay = true; },
             addOption() { if(this.currentEditingBlock.choices.length<4) this.currentEditingBlock.choices.push(this.makeLogicChoiceDraft()); },
+            setDefaultChoice(idx) { if(!this.currentEditingBlock) return; this.currentEditingBlock.choices.forEach((c, i) => { c.isDefault = (i === idx); }); },
             
             async fetchStats() {
                 this.view = 'stats';
@@ -5242,7 +5348,9 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                             triggerTime: this.currentEditingBlock.triggerTime,
                             choices: this.currentEditingBlock.choices,
                             bgMusic: this.logicBgMusic,
-                            muteAudio: this.logicMuteVideo
+                            muteAudio: this.logicMuteVideo,
+                            timeLimit: this.currentEditingBlock.timeLimit,
+                            shuffleChoices: this.currentEditingBlock.shuffleChoices
                         })
                     }, 'Could not save logic block');
                     this.showToast('Saved');
@@ -5288,6 +5396,8 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                     }, 'Build failed');
                     this.publishUrl = data.url;
                     this.feedUrl = data.feedUrl || '';
+                    this.linkCopied = false;
+                    this.embedCopied = false;
                     this.showToast("Build Complete!");
                     await this.fetchExports();
                 } catch(e) {
@@ -5296,6 +5406,20 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                     this.publishing = false;
                     this.isProcessing = false;
                 }
+            },
+            async copyPublishLink() {
+                try {
+                    await navigator.clipboard.writeText(this.absolutePublishUrl);
+                    this.linkCopied = true;
+                    setTimeout(() => { this.linkCopied = false; }, 2000);
+                } catch (e) { this.showToast('Copy failed — select the link manually', 'error'); }
+            },
+            async copyEmbedSnippet() {
+                try {
+                    await navigator.clipboard.writeText(this.embedSnippet);
+                    this.embedCopied = true;
+                    setTimeout(() => { this.embedCopied = false; }, 2000);
+                } catch (e) { this.showToast('Copy failed — select the snippet manually', 'error'); }
             },
             async exportMp4() {
                 if (this.mp4ExportPath.length < 2) return this.showToast('Select at least 2 clips to export', 'error');
@@ -5589,6 +5713,9 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 this.previewMode = false;
                 this.previewCurrentOptions = null;
                 this.previewShowChoices = false;
+                this.showPreviewVars = false;
+                this.newPreviewVar = '';
+                this.clearPreviewChoiceTimer();
                 if(this.$refs.previewPlayer) this.$refs.previewPlayer.pause();
                 if(this.$refs.previewBgm) this.$refs.previewBgm.pause();
             },
@@ -5609,10 +5736,12 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                     const key = e.logic_id || e.trigger_time;
                     if(!blocks[key]) blocks[key] = { 
                         id: key, 
-                        time: e.trigger_time, 
+                        time: e.trigger_time,
+                        timeLimit: e.time_limit || 0,
+                        shuffle: !!e.shuffle_choices,
                         choices: [] 
                     };
-                    blocks[key].choices.push({ to: e.to_id, label: e.label, color: e.text_color, setVar: e.set_var, reqVar: e.req_var, return: !!e.return_to_main, action: e.action_type || 'target', edgeThumb: e.thumbnail });
+                    blocks[key].choices.push({ to: e.to_id, label: e.label, color: e.text_color, setVar: e.set_var, reqVar: e.req_var, return: !!e.return_to_main, action: e.action_type || 'target', edgeThumb: e.thumbnail, isDefault: !!e.is_default });
                 });
                 this.previewActiveBlocks = Object.values(blocks).sort((a,b) => a.time - b.time);
 
@@ -5672,13 +5801,17 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                         v.play();
                         return;
                     }
-                    this.previewCurrentOptions = block;
+                    const displayBlock = Object.assign({}, block);
+                    displayBlock.choices = block.shuffle ? this.shuffledChoices(block.choices) : block.choices.slice();
+                    this.previewCurrentOptions = displayBlock;
                     this.previewShowChoices = true;
+                    this.startPreviewChoiceTimer(displayBlock);
                     return;
                 }
             },
             makePreviewChoice(choice) {
                 if(this.isPreviewLocked(choice)) return;
+                this.clearPreviewChoiceTimer();
                 this.stopAllChoiceHoverPreviews();
                 if(choice.setVar) this.previewGameState[choice.setVar] = true;
                 if(choice.action === 'end') {
@@ -5746,6 +5879,38 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 }
             },
             isPreviewLocked(ch) { if(!ch.reqVar) return false; return !this.previewGameState[ch.reqVar]; },
+            shuffledChoices(arr) {
+                const a = (arr || []).slice();
+                for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; }
+                return a;
+            },
+            startPreviewChoiceTimer(block) {
+                this.clearPreviewChoiceTimer();
+                const limit = Number(block && block.timeLimit) || 0;
+                if (limit <= 0) { this.previewChoiceTimeLeft = null; return; }
+                this.previewChoiceTimeLeft = limit;
+                this.previewChoiceTimerId = setInterval(() => {
+                    this.previewChoiceTimeLeft = Math.max(0, (this.previewChoiceTimeLeft || 0) - 0.1);
+                    if (this.previewChoiceTimeLeft <= 0) {
+                        this.clearPreviewChoiceTimer();
+                        const opts = this.previewCurrentChoices;
+                        const pick = opts.find(c => c.isDefault && !this.isPreviewLocked(c)) || opts.find(c => !this.isPreviewLocked(c));
+                        if (pick) this.makePreviewChoice(pick);
+                    }
+                }, 100);
+            },
+            clearPreviewChoiceTimer() {
+                if (this.previewChoiceTimerId) { clearInterval(this.previewChoiceTimerId); this.previewChoiceTimerId = null; }
+                this.previewChoiceTimeLeft = null;
+            },
+            addPreviewVar() {
+                const key = String(this.newPreviewVar || '').trim();
+                if (!key) return;
+                this.previewGameState[key] = true;
+                this.newPreviewVar = '';
+            },
+            removePreviewVar(key) { delete this.previewGameState[key]; },
+            clearPreviewVars() { this.previewGameState = {}; },
 
             // --- GRAPH EDITOR LOGIC ---
             openGraph() {
