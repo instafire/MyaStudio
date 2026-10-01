@@ -32,3 +32,16 @@ If you add tests, place them in a dedicated `tests/` directory and wire a real `
 
 ## Commit & Pull Request Guidelines
 Git history is not available in this workspace, so no repository-specific commit convention could be verified. Use short, imperative commit subjects such as `Add guard for missing clip metadata`. PRs should include a clear summary, manual verification steps, linked issue/task if applicable, and screenshots when `public/index.html` behavior changes.
+
+## Pushing to GitHub (learned 2026-10-01)
+
+- `git push origin main` over HTTPS has no auth on this VM (fails asking for a username).
+- Push via the Git Data API using the vault `custom.github` credential through
+  `dynamic_credentials.add_surrogate_to_request` (see `/opt/hatch/skills/skill-creator/bin`).
+- The old helper `/tmp/myatest/gh_push_myastudio.py` uses a HARDCODED file list —
+  it silently drops new files. Never use it for commits that add files.
+- Correct flow: build the tree from `git ls-tree -r --name-only <commit>`, upload
+  every file as a blob, create the commit, then PATCH `/repos/instafire/MyaStudio/git/refs/heads/main`
+  (note: `refs` plural). The API needs FULL 40-char SHAs everywhere — short SHAs 422.
+- After pushing, `git fetch origin main && git reset --hard origin/main` to sync,
+  then verify new files exist on the remote tree before claiming done.
