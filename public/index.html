@@ -1995,7 +1995,7 @@
                     <span class="block text-base font-semibold text-white">{{ selectedFile ? selectedFile.name : 'Choose video or audio' }}</span>
                     <span class="text-xs text-slate-500">MP4, WebM, MOV, MP3, WAV, and other browser-compatible media</span>
                 </button>
-                <button type="button" v-if="selectedFile" @click="uploadVideo" class="btn-primary w-full py-3.5 text-sm" :disabled="uploading">{{ uploading ? 'Importing media...' : 'Import selected media' }}</button>
+                <button type="button" v-if="selectedFile" @click="uploadVideo" class="btn-primary w-full py-3.5 text-sm" :disabled="uploading">{{ uploading ? ('Importing media...' + uploadProgress) : 'Import selected media' }}</button>
                 <div class="upload-next"><span aria-hidden="true">Next</span><strong>Cut reusable scenes in the Editor.</strong></div>
             </div>
         </div>
@@ -3292,7 +3292,7 @@
         data() {
             return {
                 view: 'projects', projects: [], currentProject: null,
-                videos: [], clips: [], edges: [], audioFiles: [], uploading: false, selectedFile: null, selectedVidId: null, videoUrl: '', currentVidDuration: 0, currentTime: 0, clipStart: 0, clipEnd: 0, clipName: '', clipFilter: 'none', clipSpeed: 1, clipVolume: 1,
+                videos: [], clips: [], edges: [], audioFiles: [], uploading: false, uploadProgress: '', selectedFile: null, selectedVidId: null, videoUrl: '', currentVidDuration: 0, currentTime: 0, clipStart: 0, clipEnd: 0, clipName: '', clipFilter: 'none', clipSpeed: 1, clipVolume: 1,
                 // Event Clips
 eventChoices: [{label:'', toId:null, color:'#ffffff', returnToMain:true, setVar:'', reqVar:'', actionType:'target'}],
                 previewEventClip: null, showTestChoices: false, testChoices: [], testHistory: [], testIsReturning: false,
@@ -4668,15 +4668,53 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
             },
 
             handleFileSelect(e) { this.selectedFile = e.target.files[0]; },
+            // Uploads a file, splitting it into small chunks when it is too big for a
+            // single request (Cloudflare's edge rejects bodies over 100MB). Returns
+            // the server's JSON response for the completed upload.
+            async uploadFileSmart(file) {
+                const SINGLE_SHOT_MAX = 90 * 1024 * 1024; // stay under Cloudflare's 100MB cap
+                const CHUNK_SIZE = 5 * 1024 * 1024;
+                const HARD_MAX = 800 * 1024 * 1024;
+                if (file.size > HARD_MAX) throw new Error('File exceeds the 800MB limit');
+                if (file.size <= SINGLE_SHOT_MAX) {
+                    const fd = new FormData();
+                    fd.append('file', file);
+                    fd.append('projectId', this.currentProject.id);
+                    return this.requestJson('/api/upload', { method: 'POST', body: fd }, 'Upload failed');
+                }
+                const uploadId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+                    : (Date.now().toString(16) + '-' + Math.random().toString(16).slice(2) + '-4upload');
+                const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+                for (let i = 0; i < totalChunks; i++) {
+                    const fd = new FormData();
+                    fd.append('chunk', file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE), 'chunk.bin');
+                    fd.append('uploadId', uploadId);
+                    fd.append('chunkIndex', String(i));
+                    fd.append('totalChunks', String(totalChunks));
+                    await this.requestJson('/api/upload/chunk', { method: 'POST', body: fd }, 'Upload failed');
+                    this.uploadProgress = ' ' + Math.round(((i + 1) / totalChunks) * 100) + '%';
+                }
+                this.uploadProgress = ' finalizing...';
+                try {
+                    return await this.requestJson('/api/upload/complete', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            uploadId, fileName: file.name, projectId: this.currentProject.id,
+                            totalChunks, totalSize: file.size, mimeType: file.type || ''
+                        })
+                    }, 'Upload failed');
+                } finally {
+                    this.uploadProgress = '';
+                }
+            },
             async uploadVideo() {
                 if (!this.selectedFile || !this.currentProject) return;
                 this.uploading = true;
                 this.isProcessing = true;
-                const fd = new FormData();
-                fd.append('file', this.selectedFile);
-                fd.append('projectId', this.currentProject.id);
+                this.uploadProgress = '';
                 try {
-                    await this.requestJson('/api/upload', { method:'POST', body: fd }, 'Upload failed');
+                    await this.uploadFileSmart(this.selectedFile);
                     this.showToast("Imported!");
                     await this.refreshData();
                     this.view='clipper';
@@ -4685,14 +4723,14 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 } finally {
                     this.uploading = false;
                     this.isProcessing = false;
+                    this.uploadProgress = '';
                 }
             },
-            
+
             async uploadAudio(e) {
                 const file = e.target.files[0]; if (!file) return;
-                const fd = new FormData(); fd.append('file', file); fd.append('projectId', this.currentProject.id);
                 try {
-                    const data = await this.requestJson('/api/upload', { method: 'POST', body: fd }, 'Upload failed');
+                    const data = await this.uploadFileSmart(file);
                     if (data.success && data.type === 'audio') {
                         this.showToast("Audio Uploaded!");
                         await this.refreshData();

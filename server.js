@@ -141,6 +141,35 @@ const subtitleUpload = multer({
     }
 });
 
+// ---- Chunked uploads -------------------------------------------------
+// chaty.eu.cc sits behind Cloudflare's edge (free plan), which rejects any
+// single request body over 100MB with a 413. The app-level multer cap is
+// 800MB, so large uploads must be split client-side into small chunks; each
+// chunk is its own small request and the server reassembles them.
+const CHUNK_UPLOAD_DIR = path.join(__dirname, 'uploads', 'chunks');
+const CHUNK_MAX_BYTES = 10 * 1024 * 1024;       // max size of one chunk request
+const FINAL_MAX_BYTES = 1024 * 1024 * 800;     // same ceiling as the single-shot route
+const UPLOAD_ID_RE = /^[0-9a-fA-F-]{36}$/;
+const chunkUpload = multer({
+    dest: CHUNK_UPLOAD_DIR,
+    limits: { fileSize: CHUNK_MAX_BYTES }
+});
+
+async function sweepStaleChunkUploads(maxAgeMs = 24 * 3600 * 1000) {
+    try {
+        await fs.ensureDir(CHUNK_UPLOAD_DIR);
+        const now = Date.now();
+        for (const name of await fs.readdir(CHUNK_UPLOAD_DIR)) {
+            if (!name.endsWith('.part')) continue;
+            const p = path.join(CHUNK_UPLOAD_DIR, name);
+            try {
+                const st = await fs.stat(p);
+                if (now - st.mtimeMs > maxAgeMs) await fs.remove(p);
+            } catch (_) { /* ignore races */ }
+        }
+    } catch (_) { /* best effort */ }
+}
+
 function ensureDbReady() {
     if (!db) {
         const err = new Error('Database is not ready yet');
@@ -1485,31 +1514,115 @@ app.post('/api/delete_export', async (req, res) => {
     }
 });
 
+// Shared post-upload processing for both single-shot and chunked uploads:
+// duration probe, thumbnail, videos row + auto-created FULL clip.
+async function finalizeUploadedMedia({ absPath, filename, originalname, mimetype, projectId }) {
+    ensureDbReady();
+    const project = await db.get('SELECT id FROM projects WHERE id = ?', [projectId]);
+    if (!project) {
+        await fs.remove(absPath).catch(() => {});
+        throw createHttpError('Project not found', 404);
+    }
+    if (String(mimetype || '').startsWith('audio')) {
+        return { success: true, type: 'audio', path: `/audio/${filename}`, name: originalname };
+    }
+    const webPath = `/videos/${filename}`;
+    const duration = await probeDuration(absPath);
+    const thumbnail = await generateThumbnail(absPath, filename);
+    const result = await db.run(
+        'INSERT INTO videos (project_id, filename, filepath, thumbnail, duration) VALUES (?, ?, ?, ?, ?)',
+        [projectId, originalname, webPath, thumbnail, duration]
+    );
+    const clipId = uuidv4();
+    await db.run(
+        'INSERT INTO clips (unique_id, project_id, name, filepath, thumbnail, source_video_id, duration, x, y, builder_visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
+        [clipId, projectId, `FULL: ${originalname}`, webPath, thumbnail, result.lastID, duration, 100, 100]
+    );
+    return { success: true, type: 'video' };
+}
+
 app.post('/api/upload', upload.single('file'), async (req, res) => {
     try {
-        ensureDbReady();
         const projectId = parseProjectId(req.body && req.body.projectId, 1);
         if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-        const project = await db.get('SELECT id FROM projects WHERE id = ?', [projectId]);
-        if (!project) return res.status(404).json({ error: 'Project not found' });
-        if (req.file.mimetype.startsWith('audio')) {
-            return res.json({ success: true, type: 'audio', path: `/audio/${req.file.filename}`, name: req.file.originalname });
-        }
+        const out = await finalizeUploadedMedia({
+            absPath: req.file.path,
+            filename: req.file.filename,
+            originalname: req.file.originalname,
+            mimetype: req.file.mimetype,
+            projectId
+        });
+        res.json(out);
+    } catch (err) {
+        console.error(err);
+        sendApiError(res, err, 'Upload failed');
+    }
+});
 
-        const filename = req.file.filename;
-        const webPath = `/videos/${filename}`;
-        const duration = await probeDuration(req.file.path);
-        const thumbnail = await generateThumbnail(req.file.path, filename);
-        const result = await db.run(
-            'INSERT INTO videos (project_id, filename, filepath, thumbnail, duration) VALUES (?, ?, ?, ?, ?)',
-            [projectId, req.file.originalname, webPath, thumbnail, duration]
-        );
-        const clipId = uuidv4();
-        await db.run(
-            'INSERT INTO clips (unique_id, project_id, name, filepath, thumbnail, source_video_id, duration, x, y, builder_visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
-            [clipId, projectId, `FULL: ${req.file.originalname}`, webPath, thumbnail, result.lastID, duration, 100, 100]
-        );
-        res.json({ success: true, type: 'video' });
+// One chunk of a chunked upload. Chunks are appended in arrival order to
+// uploads/chunks/<uploadId>.part; the client sends them sequentially.
+app.post('/api/upload/chunk', chunkUpload.single('chunk'), async (req, res) => {
+    try {
+        const uploadId = String((req.body && req.body.uploadId) || '');
+        const chunkIndex = Number(req.body && req.body.chunkIndex);
+        const totalChunks = Number(req.body && req.body.totalChunks);
+        if (!UPLOAD_ID_RE.test(uploadId)) {
+            if (req.file) await fs.remove(req.file.path).catch(() => {});
+            return res.status(400).json({ error: 'Bad uploadId' });
+        }
+        if (!req.file) return res.status(400).json({ error: 'Missing chunk' });
+        if (!Number.isInteger(chunkIndex) || chunkIndex < 0 ||
+            !Number.isInteger(totalChunks) || totalChunks <= 0 || chunkIndex >= totalChunks) {
+            await fs.remove(req.file.path).catch(() => {});
+            return res.status(400).json({ error: 'Bad chunk index' });
+        }
+        const partPath = path.join(CHUNK_UPLOAD_DIR, `${uploadId}.part`);
+        const data = await fs.readFile(req.file.path);
+        await fs.appendFile(partPath, data);
+        await fs.remove(req.file.path).catch(() => {});
+        if (chunkIndex === 0) sweepStaleChunkUploads(); // opportunistic cleanup
+        res.json({ ok: true, received: chunkIndex + 1, totalChunks });
+    } catch (err) {
+        console.error(err);
+        sendApiError(res, err, 'Chunk upload failed');
+    }
+});
+
+// Finish a chunked upload: verify the reassembled size, move it into place,
+// then run the same processing as a single-shot upload.
+app.post('/api/upload/complete', async (req, res) => {
+    try {
+        const body = req.body || {};
+        const uploadId = String(body.uploadId || '');
+        const projectId = parseProjectId(body.projectId, 1);
+        const totalSize = Number(body.totalSize);
+        if (!UPLOAD_ID_RE.test(uploadId)) return res.status(400).json({ error: 'Bad uploadId' });
+        if (!Number.isFinite(totalSize) || totalSize <= 0 || totalSize > FINAL_MAX_BYTES) {
+            return res.status(400).json({ error: 'File too large (800MB max)' });
+        }
+        const partPath = path.join(CHUNK_UPLOAD_DIR, `${uploadId}.part`);
+        const st = await fs.stat(partPath).catch(() => null);
+        if (!st || st.size !== totalSize) {
+            if (st) await fs.remove(partPath).catch(() => {});
+            return res.status(400).json({ error: 'Incomplete upload, please retry' });
+        }
+        const fileName = String(body.fileName || 'upload.bin');
+        const ext = path.extname(fileName).toLowerCase() || '.mp4';
+        const filename = Date.now() + ext;
+        const isAudio = String(body.mimeType || '').startsWith('audio');
+        const destDir = path.join(__dirname, 'public', isAudio ? 'audio' : 'videos');
+        await fs.ensureDir(destDir);
+        const absPath = path.join(destDir, filename);
+        await fs.move(partPath, absPath, { overwrite: false });
+        sweepStaleChunkUploads();
+        const out = await finalizeUploadedMedia({
+            absPath,
+            filename,
+            originalname: fileName,
+            mimetype: String(body.mimeType || ''),
+            projectId
+        });
+        res.json(out);
     } catch (err) {
         console.error(err);
         sendApiError(res, err, 'Upload failed');
