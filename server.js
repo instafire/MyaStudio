@@ -16,22 +16,63 @@ const {
     buildMovieAgentPrompt,
     normalizeMoviePlan
 } = require('./lib/movie-agent');
+const {
+    classifyMediaUpload,
+    isSafeExportName,
+    isAllowedLocalOrigin,
+    normalizeExportPosterPath,
+    normalizePublicAssetPath,
+    parsePort,
+    resolveLoopbackHost,
+    resolvePublicAssetPath,
+    selectAllowedImportColumns,
+    validateLocalRequestPolicy
+} = require('./lib/security');
 
-const HOST = process.env.HOST || '127.0.0.1';
-const PORT = Number(process.env.PORT || 3000);
-const FEED_HOST = process.env.FEED_HOST || HOST;
-const FEED_PORT = Number(process.env.FEED_PORT || (PORT === 3000 ? 3001 : PORT + 1));
+const HOST = resolveLoopbackHost(process.env.HOST || '127.0.0.1', 'HOST');
+const PORT = parsePort(process.env.PORT, 3000, 'PORT');
+const FEED_HOST = resolveLoopbackHost(process.env.FEED_HOST || HOST, 'FEED_HOST');
+const FEED_PORT = parsePort(process.env.FEED_PORT, PORT === 3000 ? 3001 : PORT + 1, 'FEED_PORT');
+if (PORT === FEED_PORT) throw new Error('PORT and FEED_PORT must be different');
+const DATABASE_PATH = process.env.MYA_DATABASE_PATH
+    ? path.resolve(process.env.MYA_DATABASE_PATH)
+    : path.join(__dirname, 'database.sqlite');
+const PUBLIC_ROOT = path.join(__dirname, 'public');
 const app = express();
 const feedApp = express();
 
-function normalizePublicHost(host) {
-    const value = String(host || '').trim();
-    if (!value || value === '0.0.0.0' || value === '::') return '127.0.0.1';
-    return value;
+function formatHostForUrl(host) {
+    return host.includes(':') ? `[${host}]` : host;
 }
 
-const STUDIO_PUBLIC_ORIGIN = process.env.STUDIO_PUBLIC_ORIGIN || `http://${normalizePublicHost(HOST)}:${PORT}`;
-const FEED_PUBLIC_ORIGIN = process.env.FEED_PUBLIC_ORIGIN || `http://${normalizePublicHost(FEED_HOST)}:${FEED_PORT}`;
+const STUDIO_PUBLIC_ORIGIN = process.env.STUDIO_PUBLIC_ORIGIN || `http://${formatHostForUrl(HOST)}:${PORT}`;
+const FEED_PUBLIC_ORIGIN = process.env.FEED_PUBLIC_ORIGIN || `http://${formatHostForUrl(FEED_HOST)}:${FEED_PORT}`;
+const LOCAL_CORS_PORTS = new Set([PORT, FEED_PORT]);
+const LOCAL_CORS_OPTIONS = {
+    origin(origin, callback) {
+        callback(null, isAllowedLocalOrigin(origin, LOCAL_CORS_PORTS));
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type'],
+    maxAge: 600
+};
+function enforceLocalRequestPolicy(req, res, next) {
+    const policy = validateLocalRequestPolicy({
+        origin: req.get('Origin'),
+        allowedPorts: LOCAL_CORS_PORTS,
+        method: req.method,
+        requestPath: req.path,
+        contentType: req.get('Content-Type')
+    });
+    if (!policy.allowed) return res.status(policy.status).json({ error: policy.error });
+    next();
+}
+
+function setBrowserSecurityHeaders(req, res, next) {
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+}
 
 if (ffmpegStatic) {
     ffmpeg.setFfmpegPath(ffmpegStatic);
@@ -51,7 +92,9 @@ const DEFAULT_AI_SETTINGS = {
     ollamaHost: 'http://127.0.0.1:11434'
 };
 
-app.use(cors());
+app.use(cors(LOCAL_CORS_OPTIONS));
+app.use(enforceLocalRequestPolicy);
+app.use(setBrowserSecurityHeaders);
 app.use(express.json());
 app.use((req, res, next) => {
     if (req.path === '/' || req.path === '/index.html') {
@@ -61,7 +104,9 @@ app.use((req, res, next) => {
 });
 app.use(express.static(path.join(__dirname, 'public')));
 
-feedApp.use(cors());
+feedApp.use(cors(LOCAL_CORS_OPTIONS));
+feedApp.use(enforceLocalRequestPolicy);
+feedApp.use(setBrowserSecurityHeaders);
 feedApp.use(express.json());
 feedApp.use((req, res, next) => {
     if (req.path === '/' || req.path === '/index.html') {
@@ -78,7 +123,7 @@ folders.forEach(f => fs.ensureDirSync(path.join(__dirname, 'public', f)));
 // 2. DATABASE INIT
 let db;
 (async () => {
-    db = await open({ filename: './database.sqlite', driver: sqlite3.Database });
+    db = await open({ filename: DATABASE_PATH, driver: sqlite3.Database });
     
     // Core Tables
     await db.exec(`CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, theme_color TEXT DEFAULT '#3b82f6', genre TEXT DEFAULT 'Interactive story', synopsis TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);`);
@@ -118,18 +163,25 @@ let db;
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        const dest = file.mimetype.startsWith('audio') ? 'public/audio' : 'public/videos';
+        const dest = file.mediaType === 'audio' ? 'public/audio' : 'public/videos';
         cb(null, path.join(__dirname, dest));
     },
-    filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
+    filename: (req, file, cb) => cb(null, `${uuidv4()}${file.safeExtension}`)
 });
 const upload = multer({
     storage,
-    limits: { fileSize: 1024 * 1024 * 800 }
+    limits: { fileSize: 1024 * 1024 * 800 },
+    fileFilter: (req, file, cb) => {
+        const media = classifyMediaUpload(file.originalname, file.mimetype);
+        if (!media) return cb(createHttpError('Only supported audio and video files are accepted', 400));
+        file.mediaType = media.type;
+        file.safeExtension = media.extension;
+        cb(null, true);
+    }
 });
 const subtitleStorage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, path.join(__dirname, 'public', 'subtitles')),
-    filename: (req, file, cb) => cb(null, Date.now() + '.vtt')
+    filename: (req, file, cb) => cb(null, `${uuidv4()}.vtt`)
 });
 const subtitleUpload = multer({
     storage: subtitleStorage,
@@ -163,8 +215,26 @@ function createHttpError(message, statusCode) {
     return err;
 }
 
+function safePublicAssetPath(value, allowedFolders) {
+    return allowedFolders
+        ? resolvePublicAssetPath(PUBLIC_ROOT, value, allowedFolders)
+        : resolvePublicAssetPath(PUBLIC_ROOT, value);
+}
+
+function normalizeImportedAssetPath(value, allowedFolders, fieldName, required = false) {
+    if (value == null || String(value).trim() === '') {
+        if (required) throw createHttpError(`Invalid ${fieldName} path in project import`, 400);
+        return null;
+    }
+    try {
+        return normalizePublicAssetPath(value, allowedFolders);
+    } catch (_) {
+        throw createHttpError(`Invalid ${fieldName} path in project import`, 400);
+    }
+}
+
 function buildInsertStatement(table, row, overrides = {}, omitKeys = []) {
-    const payload = { ...row, ...overrides };
+    const payload = selectAllowedImportColumns(table, { ...row, ...overrides });
     omitKeys.forEach(key => delete payload[key]);
     const columns = Object.keys(payload);
     const placeholders = columns.map(() => '?').join(', ');
@@ -175,7 +245,7 @@ function buildInsertStatement(table, row, overrides = {}, omitKeys = []) {
 }
 
 function safeExportFolderName(title) {
-    const base = String(title || '').replace(/[^a-z0-9]/gi, '_').toLowerCase().replace(/_+/g, '_').replace(/^_|_$/g, '');
+    const base = String(title || '').replace(/[^a-z0-9]/gi, '_').toLowerCase().replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 128);
     return base || `movie_${Date.now()}`;
 }
 
@@ -241,7 +311,12 @@ async function getVideoOrThrow(sourceId) {
     if (!sourceId) throw createHttpError('sourceId is required', 400);
     const video = await db.get('SELECT * FROM videos WHERE id = ?', [sourceId]);
     if (!video) throw createHttpError('Source video not found', 404);
-    const sourcePath = path.join(__dirname, 'public', video.filepath);
+    let sourcePath;
+    try {
+        sourcePath = safePublicAssetPath(video.filepath, ['videos']);
+    } catch (_) {
+        throw createHttpError('Source video file is missing', 404);
+    }
     if (!(await fs.pathExists(sourcePath))) throw createHttpError('Source video file is missing', 404);
     return { video, sourcePath };
 }
@@ -312,8 +387,11 @@ function normalizeProjectSynopsis(value) {
 }
 
 function sendApiError(res, err, fallback = 'Server error') {
-    const statusCode = err && err.statusCode ? err.statusCode : 500;
-    const message = err && err.message ? err.message : fallback;
+    const candidateStatus = Number(err && err.statusCode);
+    const statusCode = Number.isInteger(candidateStatus) && candidateStatus >= 400 && candidateStatus <= 599
+        ? candidateStatus
+        : 500;
+    const message = statusCode < 500 && err && err.message ? err.message : fallback;
     res.status(statusCode).json({ error: message });
 }
 
@@ -349,7 +427,12 @@ async function reencodeClipFile(clip, { filter = 'none', speed = 1, volume = 1 }
     const safeFilter = normalizeFilter(filter);
     const safeSpeed = normalizeSpeed(speed);
     const safeVolume = normalizeVolume(volume);
-    const sourcePath = path.join(__dirname, 'public', stripLeadingSlashes(clip.filepath));
+    let sourcePath;
+    try {
+        sourcePath = safePublicAssetPath(clip.filepath, ['clips', 'videos']);
+    } catch (_) {
+        throw createHttpError('Clip file is missing', 404);
+    }
     if (!(await fs.pathExists(sourcePath))) throw createHttpError('Clip file is missing', 404);
 
     const newId = uuidv4();
@@ -519,14 +602,14 @@ async function getMovieAgentContext(projectId) {
     if (!project) throw createHttpError('Project not found', 404);
     const videos = await db.all('SELECT * FROM videos WHERE project_id = ? ORDER BY id ASC', [safeProjectId]);
     const clips = await db.all('SELECT * FROM clips WHERE project_id = ? ORDER BY id ASC', [safeProjectId]);
-    const publicRoot = path.resolve(__dirname, 'public');
     const usableClips = [];
     const missingClipIds = [];
     for (const clip of clips) {
-        const relativePath = stripLeadingSlashes(clip && clip.filepath);
-        const resolvedPath = relativePath ? path.resolve(publicRoot, relativePath) : '';
-        const isInsidePublic = resolvedPath && (resolvedPath === publicRoot || resolvedPath.startsWith(publicRoot + path.sep));
-        if (isInsidePublic && await fs.pathExists(resolvedPath)) {
+        let resolvedPath = '';
+        try {
+            resolvedPath = safePublicAssetPath(clip && clip.filepath, ['clips', 'videos']);
+        } catch (_) {}
+        if (resolvedPath && await fs.pathExists(resolvedPath)) {
             usableClips.push(clip);
         } else if (clip && clip.unique_id) {
             missingClipIds.push(clip.unique_id);
@@ -736,9 +819,11 @@ function prettifyExportTitle(exportName) {
 }
 
 function formatFeedItem(row) {
+    const exportName = isSafeExportName(row.export_name) ? row.export_name : null;
+    const posterPath = normalizeExportPosterPath(row.poster_path);
     return {
         id: row.id,
-        exportName: row.export_name,
+        exportName,
         projectId: row.project_id,
         title: row.title || prettifyExportTitle(row.export_name),
         synopsis: String(row.synopsis || '').trim(),
@@ -751,8 +836,8 @@ function formatFeedItem(row) {
         likeCount: toFiniteNumber(row.like_count, 0),
         publishedAt: row.published_at,
         updatedAt: row.updated_at || row.published_at,
-        playerUrl: buildStudioUrl(`exports/${row.export_name}/index.html`),
-        posterUrl: row.poster_path ? buildStudioUrl(`exports/${row.export_name}/${stripLeadingSlashes(row.poster_path)}`) : null,
+        playerUrl: exportName ? buildStudioUrl(`exports/${exportName}/index.html`) : null,
+        posterUrl: exportName && posterPath ? buildStudioUrl(`exports/${exportName}/${posterPath}`) : null,
         studioUrl: `${STUDIO_PUBLIC_ORIGIN}/`
     };
 }
@@ -851,30 +936,35 @@ async function reconcileMediaRecords() {
     const missingVideoThumbs = [];
 
     for (const clip of clips) {
-        const clipPath = path.join(__dirname, 'public', String(clip.filepath || '').replace(/^\/+/, ''));
-        if (!clip.filepath || !(await fs.pathExists(clipPath))) {
+        let clipPath = '';
+        try { clipPath = safePublicAssetPath(clip.filepath, ['clips', 'videos']); } catch (_) {}
+        if (!clipPath || !(await fs.pathExists(clipPath))) {
             missingClipFiles.push(clip);
             continue;
         }
         if (clip.thumbnail) {
-            const thumbPath = path.join(__dirname, 'public', String(clip.thumbnail).replace(/^\/+/, ''));
-            if (!(await fs.pathExists(thumbPath))) missingClipThumbs.push(clip.unique_id);
+            let thumbPath = '';
+            try { thumbPath = safePublicAssetPath(clip.thumbnail, ['thumbnails']); } catch (_) {}
+            if (!thumbPath || !(await fs.pathExists(thumbPath))) missingClipThumbs.push(clip.unique_id);
         }
         if (clip.bg_music) {
-            const audioPath = path.join(__dirname, 'public', String(clip.bg_music).replace(/^\/+/, ''));
-            if (!(await fs.pathExists(audioPath))) missingClipAudio.push(clip.unique_id);
+            let audioPath = '';
+            try { audioPath = safePublicAssetPath(clip.bg_music, ['audio']); } catch (_) {}
+            if (!audioPath || !(await fs.pathExists(audioPath))) missingClipAudio.push(clip.unique_id);
         }
     }
 
     for (const video of videos) {
-        const videoPath = path.join(__dirname, 'public', String(video.filepath || '').replace(/^\/+/, ''));
-        if (!video.filepath || !(await fs.pathExists(videoPath))) {
+        let videoPath = '';
+        try { videoPath = safePublicAssetPath(video.filepath, ['videos']); } catch (_) {}
+        if (!videoPath || !(await fs.pathExists(videoPath))) {
             missingVideoFiles.push(video);
             continue;
         }
         if (video.thumbnail) {
-            const thumbPath = path.join(__dirname, 'public', String(video.thumbnail).replace(/^\/+/, ''));
-            if (!(await fs.pathExists(thumbPath))) missingVideoThumbs.push(video.id);
+            let thumbPath = '';
+            try { thumbPath = safePublicAssetPath(video.thumbnail, ['thumbnails']); } catch (_) {}
+            if (!thumbPath || !(await fs.pathExists(thumbPath))) missingVideoThumbs.push(video.id);
         }
     }
 
@@ -956,6 +1046,7 @@ async function reconcilePublishedMovies() {
     const exportEntries = await fs.readdir(exportDir);
     const validExports = [];
     for (const entry of exportEntries) {
+        if (!isSafeExportName(entry)) continue;
         const entryPath = path.join(exportDir, entry);
         if ((await fs.stat(entryPath)).isDirectory() && await fs.pathExists(path.join(entryPath, 'index.html'))) {
             validExports.push(entry);
@@ -980,17 +1071,18 @@ async function reconcilePublishedMovies() {
             continue;
         }
 
-        const posterMissing = row.poster_path
-            ? !(await fs.pathExists(path.join(exportDir, exportName, stripLeadingSlashes(row.poster_path))))
+        const posterPath = normalizeExportPosterPath(row.poster_path);
+        const posterMissing = posterPath
+            ? !(await fs.pathExists(path.join(exportDir, exportName, posterPath)))
             : true;
         if (posterMissing || !row.title) {
             await db.run(
                 `UPDATE published_movies
                  SET title = COALESCE(NULLIF(title, ''), ?),
-                     poster_path = COALESCE(?, poster_path),
+                     poster_path = ?,
                      clip_count = CASE WHEN clip_count > 0 THEN clip_count ELSE ? END
                  WHERE export_name = ?`,
-                [fallback.title, fallback.posterPath, fallback.clipCount, exportName]
+                [fallback.title, normalizeExportPosterPath(fallback.posterPath), fallback.clipCount, exportName]
             );
         }
     }
@@ -999,16 +1091,21 @@ async function reconcilePublishedMovies() {
 async function removePublicAssetIfUnused(webPath) {
     const normalized = String(webPath || '').trim();
     if (!normalized) return;
-    const relativePath = normalized.replace(/^\/+/, '');
-    if (!relativePath || relativePath.includes('..')) return;
+    let assetPath;
+    try {
+        assetPath = safePublicAssetPath(normalized, ['videos', 'clips', 'thumbnails', 'audio', 'gifs', 'subtitles']);
+    } catch (_) {
+        return;
+    }
     const usage = await db.get(
         `SELECT
             (SELECT COUNT(*) FROM videos WHERE filepath = ? OR thumbnail = ?) +
-            (SELECT COUNT(*) FROM clips WHERE filepath = ? OR thumbnail = ? OR bg_music = ?) AS total`,
-        [normalized, normalized, normalized, normalized, normalized]
+            (SELECT COUNT(*) FROM clips WHERE filepath = ? OR thumbnail = ? OR bg_music = ? OR subtitle_path = ?) +
+            (SELECT COUNT(*) FROM edges WHERE thumbnail = ?) AS total`,
+        [normalized, normalized, normalized, normalized, normalized, normalized, normalized]
     );
     if (toFiniteNumber(usage && usage.total, 0) > 0) return;
-    await fs.remove(path.join(__dirname, 'public', relativePath));
+    await fs.remove(assetPath);
 }
 
 async function removeUnusedPublicAssets(paths) {
@@ -1277,22 +1374,22 @@ app.post('/api/project/duplicate', async (req, res) => {
             for (const video of sourceVideos) {
                 const videoInsert = buildInsertStatement('videos', video, { project_id: newProjectId }, ['id', 'created_at']);
                 const videoResult = await db.run(videoInsert.sql, videoInsert.values);
-                sourceVideoIdMap.set(video.id, videoResult.lastID);
+                sourceVideoIdMap.set(String(video.id), videoResult.lastID);
             }
 
             const sourceClips = await db.all('SELECT * FROM clips WHERE project_id = ? ORDER BY id ASC', [id]);
             const sourceClipIdMap = new Map();
-            sourceClips.forEach(clip => sourceClipIdMap.set(clip.unique_id, uuidv4()));
+            sourceClips.forEach(clip => sourceClipIdMap.set(String(clip.unique_id), uuidv4()));
 
             for (const clip of sourceClips) {
                 const clipInsert = buildInsertStatement(
                     'clips',
                     clip,
                     {
-                        unique_id: sourceClipIdMap.get(clip.unique_id),
+                        unique_id: sourceClipIdMap.get(String(clip.unique_id)),
                         project_id: newProjectId,
-                        source_video_id: clip.source_video_id ? (sourceVideoIdMap.get(clip.source_video_id) || null) : null,
-                        timeout_to_id: clip.timeout_to_id ? (sourceClipIdMap.get(clip.timeout_to_id) || clip.timeout_to_id) : clip.timeout_to_id
+                        source_video_id: clip.source_video_id ? (sourceVideoIdMap.get(String(clip.source_video_id)) || null) : null,
+                        timeout_to_id: clip.timeout_to_id ? (sourceClipIdMap.get(String(clip.timeout_to_id)) || null) : null
                     },
                     ['id']
                 );
@@ -1301,13 +1398,18 @@ app.post('/api/project/duplicate', async (req, res) => {
 
             const sourceEdges = await db.all('SELECT * FROM edges WHERE project_id = ? ORDER BY id ASC', [id]);
             for (const edge of sourceEdges) {
+                const mappedFrom = sourceClipIdMap.get(String(edge.from_id));
+                const mappedTo = edge.to_id ? sourceClipIdMap.get(String(edge.to_id)) || null : null;
+                if (!mappedFrom || (normalizeActionType(edge) === 'target' && !mappedTo)) {
+                    throw createHttpError('Cannot duplicate a project with invalid edge references', 400);
+                }
                 const edgeInsert = buildInsertStatement(
                     'edges',
                     edge,
                     {
                         project_id: newProjectId,
-                        from_id: sourceClipIdMap.get(edge.from_id) || edge.from_id,
-                        to_id: edge.to_id ? (sourceClipIdMap.get(edge.to_id) || edge.to_id) : edge.to_id
+                        from_id: mappedFrom,
+                        to_id: mappedTo
                     },
                     ['id']
                 );
@@ -1349,9 +1451,11 @@ app.post('/api/project/delete', async (req, res) => {
 
         const projectVideos = await db.all('SELECT * FROM videos WHERE project_id = ?', [id]);
         const projectClips = await db.all('SELECT * FROM clips WHERE project_id = ?', [id]);
+        const projectEdges = await db.all('SELECT thumbnail FROM edges WHERE project_id = ?', [id]);
         const assetPaths = [
             ...projectVideos.flatMap(video => [video.filepath, video.thumbnail]),
-            ...projectClips.flatMap(clip => [clip.filepath, clip.thumbnail, clip.bg_music])
+            ...projectClips.flatMap(clip => [clip.filepath, clip.thumbnail, clip.bg_music, clip.subtitle_path]),
+            ...projectEdges.map(edge => edge.thumbnail)
         ];
 
         await db.exec('BEGIN IMMEDIATE TRANSACTION');
@@ -1476,7 +1580,7 @@ app.get('/api/exports', async (req, res) => {
 app.post('/api/delete_export', async (req, res) => {
     try {
         const raw = String(req.body.name || '');
-        if (!/^[a-z0-9_]+$/i.test(raw)) return res.status(400).json({ error: 'Invalid export name' });
+        if (!isSafeExportName(raw)) return res.status(400).json({ error: 'Invalid export name' });
         await fs.remove(path.join(__dirname, 'public/exports', raw));
         await db.run('DELETE FROM published_movies WHERE export_name = ?', [raw]);
         res.json({ success: true });
@@ -1486,32 +1590,58 @@ app.post('/api/delete_export', async (req, res) => {
 });
 
 app.post('/api/upload', upload.single('file'), async (req, res) => {
+    let generatedThumbnail = null;
+    let uploadPersisted = false;
     try {
         ensureDbReady();
         const projectId = parseProjectId(req.body && req.body.projectId, 1);
         if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
         const project = await db.get('SELECT id FROM projects WHERE id = ?', [projectId]);
-        if (!project) return res.status(404).json({ error: 'Project not found' });
-        if (req.file.mimetype.startsWith('audio')) {
-            return res.json({ success: true, type: 'audio', path: `/audio/${req.file.filename}`, name: req.file.originalname });
+        if (!project) {
+            await fs.remove(req.file.path).catch(() => {});
+            return res.status(404).json({ error: 'Project not found' });
         }
+
+        const media = classifyMediaUpload(req.file.originalname, req.file.mimetype);
+        if (!media) throw createHttpError('Unsupported media file type', 400);
+        const originalName = String(req.file.originalname || 'media')
+            .split(/[\\/]/)
+            .pop()
+            .replace(/[\u0000-\u001f\u007f]/g, '')
+            .slice(0, 255) || 'media';
+        const duration = await probeDuration(req.file.path);
+        if (media.type === 'audio') {
+            uploadPersisted = true;
+            return res.json({ success: true, type: 'audio', path: `/audio/${req.file.filename}`, name: originalName });
+        }
+        if (!(duration > 0)) throw createHttpError('Uploaded video has no valid duration', 400);
 
         const filename = req.file.filename;
         const webPath = `/videos/${filename}`;
-        const duration = await probeDuration(req.file.path);
-        const thumbnail = await generateThumbnail(req.file.path, filename);
-        const result = await db.run(
-            'INSERT INTO videos (project_id, filename, filepath, thumbnail, duration) VALUES (?, ?, ?, ?, ?)',
-            [projectId, req.file.originalname, webPath, thumbnail, duration]
-        );
+        generatedThumbnail = await generateThumbnail(req.file.path, filename);
         const clipId = uuidv4();
-        await db.run(
-            'INSERT INTO clips (unique_id, project_id, name, filepath, thumbnail, source_video_id, duration, x, y, builder_visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
-            [clipId, projectId, `FULL: ${req.file.originalname}`, webPath, thumbnail, result.lastID, duration, 100, 100]
-        );
+        await db.exec('BEGIN IMMEDIATE TRANSACTION');
+        try {
+            const result = await db.run(
+                'INSERT INTO videos (project_id, filename, filepath, thumbnail, duration) VALUES (?, ?, ?, ?, ?)',
+                [projectId, originalName, webPath, generatedThumbnail, duration]
+            );
+            await db.run(
+                'INSERT INTO clips (unique_id, project_id, name, filepath, thumbnail, source_video_id, duration, x, y, builder_visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
+                [clipId, projectId, `FULL: ${originalName}`, webPath, generatedThumbnail, result.lastID, duration, 100, 100]
+            );
+            await db.exec('COMMIT');
+        } catch (err) {
+            await db.exec('ROLLBACK');
+            throw err;
+        }
+        uploadPersisted = true;
         res.json({ success: true, type: 'video' });
     } catch (err) {
-        console.error(err);
+        if (!uploadPersisted && req.file && req.file.path) await fs.remove(req.file.path).catch(() => {});
+        if (generatedThumbnail) {
+            try { await fs.remove(safePublicAssetPath(generatedThumbnail, ['thumbnails'])); } catch (_) {}
+        }
         sendApiError(res, err, 'Upload failed');
     }
 });
@@ -1539,7 +1669,7 @@ app.post('/api/delete_video', async (req, res) => {
             const assetPaths = [
                 vid.filepath,
                 vid.thumbnail,
-                ...relatedClips.flatMap(clip => [clip.filepath, clip.thumbnail, clip.bg_music])
+                ...relatedClips.flatMap(clip => [clip.filepath, clip.thumbnail, clip.bg_music, clip.subtitle_path])
             ];
 
             await db.exec('BEGIN IMMEDIATE TRANSACTION');
@@ -1826,7 +1956,7 @@ app.post('/api/delete_clip', async (req, res) => {
         if (String(clip.name || '').startsWith('FULL:')) {
             return res.status(400).json({ error: 'Use delete video for source clips' });
         }
-        const assetPaths = [clip.filepath, clip.thumbnail, clip.bg_music];
+        const assetPaths = [clip.filepath, clip.thumbnail, clip.bg_music, clip.subtitle_path];
         await db.exec('BEGIN IMMEDIATE TRANSACTION');
         try {
             await db.run('DELETE FROM clips WHERE unique_id = ? AND project_id = ?', [uniqueId, safeProjectId]);
@@ -1910,7 +2040,12 @@ app.post('/api/clip/split', async (req, res) => {
         if (!(splitAt > 0.15) || !(splitAt < duration - 0.15)) {
             throw createHttpError('Split point must be inside the clip (not near the ends)', 400);
         }
-        const sourcePath = path.join(__dirname, 'public', stripLeadingSlashes(clip.filepath));
+        let sourcePath;
+        try {
+            sourcePath = safePublicAssetPath(clip.filepath, ['clips', 'videos']);
+        } catch (_) {
+            throw createHttpError('Clip file is missing', 404);
+        }
         if (!(await fs.pathExists(sourcePath))) throw createHttpError('Clip file is missing', 404);
 
         const makePart = async (start, end, suffix) => {
@@ -1967,7 +2102,12 @@ app.post('/api/clip/thumbnail', async (req, res) => {
         const clipId = parseUniqueId(id, 'id');
         const clip = await db.get('SELECT * FROM clips WHERE unique_id = ? AND project_id = ?', [clipId, safeProjectId]);
         if(!clip) return res.status(404).json({error: "Clip not found"});
-        const fullPath = path.join(__dirname, 'public', clip.filepath);
+        let fullPath;
+        try {
+            fullPath = safePublicAssetPath(clip.filepath, ['clips', 'videos']);
+        } catch (_) {
+            throw createHttpError('Clip file is missing', 404);
+        }
         if (!(await fs.pathExists(fullPath))) return res.status(404).json({ error: 'Clip file is missing' });
         const filename = path.basename(clip.filepath);
         const newThumb = await generateThumbnail(fullPath, filename, time);
@@ -1991,11 +2131,13 @@ app.post('/api/clip/audio', async (req, res) => {
         let nextBgMusic = existing.bg_music;
         if (Object.prototype.hasOwnProperty.call(body, 'bgMusic')) {
             nextBgMusic = bgMusic ? String(bgMusic).trim() : null;
-            if (nextBgMusic && !nextBgMusic.startsWith('/audio/')) {
-                throw createHttpError('bgMusic must reference an /audio file', 400);
-            }
             if (nextBgMusic) {
-                const bgMusicPath = path.join(__dirname, 'public', nextBgMusic.replace(/^\/+/, ''));
+                try {
+                    nextBgMusic = normalizePublicAssetPath(nextBgMusic, ['audio']);
+                } catch (_) {
+                    throw createHttpError('bgMusic must reference a local /audio file', 400);
+                }
+                const bgMusicPath = safePublicAssetPath(nextBgMusic, ['audio']);
                 if (!(await fs.pathExists(bgMusicPath))) {
                     throw createHttpError('Audio file not found', 404);
                 }
@@ -2036,6 +2178,7 @@ app.post('/api/clip/audio', async (req, res) => {
 });
 
 app.post('/api/clip/subtitle', subtitleUpload.single('file'), async (req, res) => {
+    let uploadPersisted = false;
     try {
         ensureDbReady();
         const body = req.body || {};
@@ -2051,12 +2194,19 @@ app.post('/api/clip/subtitle', subtitleUpload.single('file'), async (req, res) =
             return res.status(400).json({ error: 'Subtitle file has no valid cues' });
         }
         await fs.writeFile(req.file.path, vtt, 'utf8');
-        if (existing.subtitle_path) await fs.remove(path.join(__dirname, 'public', existing.subtitle_path)).catch(() => {});
         const webPath = `/subtitles/${path.basename(req.file.path)}`;
         await db.run('UPDATE clips SET subtitle_path = ? WHERE unique_id = ? AND project_id = ?', [webPath, clipId, safeProjectId]);
+        uploadPersisted = true;
+        if (existing.subtitle_path && existing.subtitle_path !== webPath) {
+            try {
+                await removePublicAssetIfUnused(existing.subtitle_path);
+            } catch (cleanupError) {
+                console.error('Failed to remove obsolete subtitle file:', cleanupError);
+            }
+        }
         res.json({ success: true, path: webPath });
     } catch (err) {
-        if (req.file) await fs.remove(req.file.path).catch(() => {});
+        if (!uploadPersisted && req.file) await fs.remove(req.file.path).catch(() => {});
         sendApiError(res, err, 'Subtitle upload failed');
     }
 });
@@ -2069,8 +2219,8 @@ app.post('/api/clip/subtitle/delete', async (req, res) => {
         const clipId = parseUniqueId(body.unique_id);
         const existing = await db.get('SELECT * FROM clips WHERE unique_id = ? AND project_id = ?', [clipId, safeProjectId]);
         if (!existing) return res.status(404).json({ error: 'Clip not found' });
-        if (existing.subtitle_path) await fs.remove(path.join(__dirname, 'public', existing.subtitle_path)).catch(() => {});
         await db.run('UPDATE clips SET subtitle_path = NULL WHERE unique_id = ? AND project_id = ?', [clipId, safeProjectId]);
+        if (existing.subtitle_path) await removePublicAssetIfUnused(existing.subtitle_path);
         res.json({ success: true });
     } catch (err) {
         sendApiError(res, err);
@@ -2099,9 +2249,16 @@ app.post('/api/save_logic_block', async (req, res) => {
         const safeProjectId = parseRequiredId(projectId, 'projectId');
         const safeFromId = String(fromId || '').trim();
         if (!safeFromId) return res.status(400).json({ error: 'fromId required' });
-        const normalizedBgMusic = bgMusic ? String(bgMusic).trim() : null;
-        if (normalizedBgMusic && !normalizedBgMusic.startsWith('/audio/')) {
-            throw createHttpError('bgMusic must reference an /audio file', 400);
+        let normalizedBgMusic = bgMusic ? String(bgMusic).trim() : null;
+        if (normalizedBgMusic) {
+            try {
+                normalizedBgMusic = normalizePublicAssetPath(normalizedBgMusic, ['audio']);
+            } catch (_) {
+                throw createHttpError('bgMusic must reference a local /audio file', 400);
+            }
+            if (!(await fs.pathExists(safePublicAssetPath(normalizedBgMusic, ['audio'])))) {
+                throw createHttpError('Audio file not found', 404);
+            }
         }
         const clip = await db.get('SELECT * FROM clips WHERE unique_id = ? AND project_id = ?', [safeFromId, safeProjectId]);
         if (!clip) return res.status(404).json({ error: 'Source clip not found' });
@@ -2263,15 +2420,61 @@ app.post('/api/project/import', async (req, res) => {
         ensureDbReady();
         const payload = req.body || {};
         const sourceProject = payload.project;
-        if (!sourceProject || !sourceProject.title) {
+        if (!sourceProject || typeof sourceProject !== 'object' || Array.isArray(sourceProject) || !String(sourceProject.title || '').trim()) {
             throw createHttpError('Invalid project file: missing project.title', 400);
         }
 
         const existingTitles = await db.all('SELECT title FROM projects');
-        const title = buildDuplicateProjectTitle(sourceProject.title, existingTitles.map(row => row.title));
-        const videos = Array.isArray(payload.videos) ? payload.videos : [];
-        const clips = Array.isArray(payload.clips) ? payload.clips : [];
-        const edges = Array.isArray(payload.edges) ? payload.edges : [];
+        const title = buildDuplicateProjectTitle(String(sourceProject.title).slice(0, 80), existingTitles.map(row => row.title));
+        for (const [key, limit] of [['videos', 500], ['clips', 5000], ['edges', 10000]]) {
+            if (payload[key] != null && !Array.isArray(payload[key])) throw createHttpError(`Invalid project file: ${key} must be an array`, 400);
+            if ((payload[key] || []).length > limit) throw createHttpError(`Project file contains too many ${key}`, 400);
+        }
+        const videos = payload.videos || [];
+        const clips = payload.clips || [];
+        const edges = payload.edges || [];
+        const safeVideos = videos.map(video => {
+            const row = selectAllowedImportColumns('videos', video);
+            return {
+                ...row,
+                sourceId: video.id == null ? null : String(video.id),
+                filename: String(video.filename || '').slice(0, 255),
+                filepath: normalizeImportedAssetPath(video.filepath, ['videos'], 'video', true),
+                thumbnail: normalizeImportedAssetPath(video.thumbnail, ['thumbnails'], 'video thumbnail'),
+                duration: Math.max(0, toFiniteNumber(video.duration, 0))
+            };
+        });
+        const safeClips = clips.map(clip => {
+            const row = selectAllowedImportColumns('clips', clip);
+            const sourceId = String(clip.unique_id || '').trim();
+            if (!sourceId || sourceId.length > 100) throw createHttpError('Invalid clip ID in project import', 400);
+            return {
+                ...row,
+                sourceId,
+                unique_id: sourceId,
+                filepath: normalizeImportedAssetPath(clip.filepath, ['videos', 'clips'], 'clip', true),
+                thumbnail: normalizeImportedAssetPath(clip.thumbnail, ['thumbnails'], 'clip thumbnail'),
+                bg_music: normalizeImportedAssetPath(clip.bg_music, ['audio'], 'clip audio'),
+                subtitle_path: normalizeImportedAssetPath(clip.subtitle_path, ['subtitles'], 'subtitle')
+            };
+        });
+        const sourceClipIdMap = new Map();
+        safeClips.forEach(clip => {
+            if (sourceClipIdMap.has(clip.sourceId)) throw createHttpError('Duplicate clip ID in project import', 400);
+            sourceClipIdMap.set(clip.sourceId, uuidv4());
+        });
+        const safeEdges = edges.map(edge => {
+            const row = selectAllowedImportColumns('edges', edge);
+            if (edge.thumbnail) row.thumbnail = normalizeImportedAssetPath(edge.thumbnail, ['thumbnails'], 'edge thumbnail');
+            return row;
+        });
+        for (const edge of safeEdges) {
+            if (!sourceClipIdMap.has(String(edge.from_id || ''))) throw createHttpError('Invalid edge source in project import', 400);
+            const actionType = normalizeActionType(edge);
+            if (actionType === 'target' && !sourceClipIdMap.has(String(edge.to_id || ''))) {
+                throw createHttpError('Invalid edge target in project import', 400);
+            }
+        }
 
         await db.exec('BEGIN IMMEDIATE TRANSACTION');
         try {
@@ -2287,7 +2490,7 @@ app.post('/api/project/import', async (req, res) => {
             const newProjectId = projectResult.lastID;
 
             const sourceVideoIdMap = new Map();
-            for (const video of videos) {
+            for (const video of safeVideos) {
                 const videoInsert = buildInsertStatement(
                     'videos',
                     video,
@@ -2295,39 +2498,34 @@ app.post('/api/project/import', async (req, res) => {
                     ['id', 'created_at']
                 );
                 const videoResult = await db.run(videoInsert.sql, videoInsert.values);
-                if (video && video.id != null) sourceVideoIdMap.set(video.id, videoResult.lastID);
+                if (video.sourceId != null) sourceVideoIdMap.set(video.sourceId, videoResult.lastID);
             }
 
-            const sourceClipIdMap = new Map();
-            clips.forEach(clip => {
-                if (clip && clip.unique_id) sourceClipIdMap.set(clip.unique_id, uuidv4());
-            });
-
-            for (const clip of clips) {
-                if (!clip || !clip.unique_id) continue;
+            for (const clip of safeClips) {
                 const clipInsert = buildInsertStatement(
                     'clips',
                     clip,
                     {
-                        unique_id: sourceClipIdMap.get(clip.unique_id),
+                        unique_id: sourceClipIdMap.get(clip.sourceId),
                         project_id: newProjectId,
-                        source_video_id: clip.source_video_id ? (sourceVideoIdMap.get(clip.source_video_id) || null) : null,
-                        timeout_to_id: clip.timeout_to_id ? (sourceClipIdMap.get(clip.timeout_to_id) || null) : null
+                        source_video_id: clip.source_video_id != null ? (sourceVideoIdMap.get(String(clip.source_video_id)) || null) : null,
+                        timeout_to_id: clip.timeout_to_id ? (sourceClipIdMap.get(String(clip.timeout_to_id)) || null) : null
                     },
                     ['id']
                 );
                 await db.run(clipInsert.sql, clipInsert.values);
             }
 
-            for (const edge of edges) {
-                if (!edge || !edge.from_id) continue;
+            for (const edge of safeEdges) {
+                const actionType = normalizeActionType(edge);
                 const edgeInsert = buildInsertStatement(
                     'edges',
                     edge,
                     {
                         project_id: newProjectId,
-                        from_id: sourceClipIdMap.get(edge.from_id) || edge.from_id,
-                        to_id: edge.to_id ? (sourceClipIdMap.get(edge.to_id) || edge.to_id) : edge.to_id
+                        from_id: sourceClipIdMap.get(String(edge.from_id)),
+                        to_id: edge.to_id ? (sourceClipIdMap.get(String(edge.to_id)) || null) : null,
+                        action_type: actionType
                     },
                     ['id']
                 );
@@ -2335,7 +2533,7 @@ app.post('/api/project/import', async (req, res) => {
             }
 
             const importedStart = sourceProject.start_clip_id
-                ? (sourceClipIdMap.get(sourceProject.start_clip_id) || null)
+                ? (sourceClipIdMap.get(String(sourceProject.start_clip_id)) || null)
                 : null;
             await db.run('UPDATE projects SET start_clip_id = ? WHERE id = ?', [importedStart, newProjectId]);
             await db.exec('COMMIT');
@@ -2392,7 +2590,7 @@ app.post('/api/clips/batch_delete', async (req, res) => {
         await db.exec('BEGIN IMMEDIATE TRANSACTION');
         try {
             for (const clip of deletable) {
-                assetPaths.push(clip.filepath, clip.thumbnail, clip.bg_music);
+                assetPaths.push(clip.filepath, clip.thumbnail, clip.bg_music, clip.subtitle_path);
                 await db.run('DELETE FROM clips WHERE unique_id = ? AND project_id = ?', [clip.unique_id, safeProjectId]);
                 await cleanupClipReferences(clip.unique_id);
             }
@@ -2461,10 +2659,14 @@ app.post('/api/clips/batch_audio', async (req, res) => {
         const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.map(String).filter(Boolean) : [];
         if (!ids.length) throw createHttpError('ids required', 400);
         const muteAudio = !!(req.body && req.body.muteAudio);
-        const bgMusic = req.body && req.body.bgMusic ? String(req.body.bgMusic).trim() : null;
+        let bgMusic = req.body && req.body.bgMusic ? String(req.body.bgMusic).trim() : null;
         if (bgMusic) {
-            if (!bgMusic.startsWith('/audio/')) throw createHttpError('bgMusic must reference an /audio file', 400);
-            const bgMusicPath = path.join(__dirname, 'public', stripLeadingSlashes(bgMusic));
+            try {
+                bgMusic = normalizePublicAssetPath(bgMusic, ['audio']);
+            } catch (_) {
+                throw createHttpError('bgMusic must reference a local /audio file', 400);
+            }
+            const bgMusicPath = safePublicAssetPath(bgMusic, ['audio']);
             if (!(await fs.pathExists(bgMusicPath))) throw createHttpError('Audio file not found', 404);
         }
         let updated = 0;
@@ -2489,11 +2691,16 @@ app.post('/api/clip/thumbnails', async (req, res) => {
         const interval = Math.max(0.5, toFiniteNumber(req.body && req.body.interval, 2));
         const clip = await db.get('SELECT * FROM clips WHERE unique_id = ? AND project_id = ?', [clipId, safeProjectId]);
         if (!clip) return res.status(404).json({ error: 'Clip not found' });
-        const fullPath = path.join(__dirname, 'public', stripLeadingSlashes(clip.filepath));
+        let fullPath;
+        try {
+            fullPath = safePublicAssetPath(clip.filepath, ['clips', 'videos']);
+        } catch (_) {
+            throw createHttpError('Clip file is missing', 404);
+        }
         if (!(await fs.pathExists(fullPath))) return res.status(404).json({ error: 'Clip file is missing' });
         const duration = toFiniteNumber(clip.duration, 0) || await probeDuration(fullPath);
         const timestamps = [];
-        for (let t = 0; t < duration; t += interval) timestamps.push(t);
+        for (let index = 0; index < 40 && index * interval < duration; index += 1) timestamps.push(index * interval);
         if (!timestamps.length) timestamps.push(0);
         const limited = timestamps.slice(0, 40);
         const thumbnails = [];
@@ -2516,6 +2723,16 @@ app.post('/api/edge/thumbnail', async (req, res) => {
         if (!edge) return res.status(404).json({ error: 'Edge not found' });
 
         let thumbnail = req.body && req.body.thumbUrl ? String(req.body.thumbUrl).trim() : '';
+        if (thumbnail) {
+            try {
+                thumbnail = normalizePublicAssetPath(thumbnail, ['thumbnails']);
+            } catch (_) {
+                throw createHttpError('Thumbnail must reference a local /thumbnails file', 400);
+            }
+            if (!(await fs.pathExists(safePublicAssetPath(thumbnail, ['thumbnails'])))) {
+                throw createHttpError('Thumbnail file not found', 404);
+            }
+        }
         if (!thumbnail) {
             if (!edge.to_id) throw createHttpError('Edge has no target clip to capture from', 400);
             const target = await db.get(
@@ -2523,12 +2740,24 @@ app.post('/api/edge/thumbnail', async (req, res) => {
                 [edge.to_id, safeProjectId]
             );
             if (!target) throw createHttpError('Target clip not found', 404);
-            const fullPath = path.join(__dirname, 'public', stripLeadingSlashes(target.filepath));
+            let fullPath;
+            try {
+                fullPath = safePublicAssetPath(target.filepath, ['clips', 'videos']);
+            } catch (_) {
+                throw createHttpError('Target clip file is missing', 404);
+            }
             if (!(await fs.pathExists(fullPath))) throw createHttpError('Target clip file is missing', 404);
+            const targetDuration = toFiniteNumber(target.duration, 0);
+            const captureTime = req.body && req.body.time != null
+                ? toFiniteNumber(req.body.time, -1)
+                : '50%';
+            if (typeof captureTime === 'number' && (captureTime < 0 || (targetDuration > 0 && captureTime > targetDuration))) {
+                throw createHttpError('Invalid thumbnail capture time', 400);
+            }
             thumbnail = await generateThumbnail(
                 fullPath,
                 path.basename(target.filepath),
-                req.body && req.body.time != null ? req.body.time : '50%'
+                captureTime
             );
             if (!thumbnail) throw createHttpError('Could not generate thumbnail', 500);
         }
@@ -2558,7 +2787,11 @@ app.post('/api/export/gif', async (req, res) => {
             const clipId = parseUniqueId(body.clipId, 'clipId');
             const clip = await db.get('SELECT * FROM clips WHERE unique_id = ? AND project_id = ?', [clipId, safeProjectId]);
             if (!clip) return res.status(404).json({ error: 'Clip not found' });
-            sourcePath = path.join(__dirname, 'public', stripLeadingSlashes(clip.filepath));
+            try {
+                sourcePath = safePublicAssetPath(clip.filepath, ['clips', 'videos']);
+            } catch (_) {
+                throw createHttpError('Clip file is missing', 404);
+            }
             label = String(clip.name || 'clip').replace(/[^a-z0-9]+/gi, '_').slice(0, 40) || 'clip';
             if (endTime == null) {
                 endTime = toFiniteNumber(clip.duration, 0);
@@ -2589,9 +2822,9 @@ app.post('/api/export/gif', async (req, res) => {
 
         const fps = Math.min(15, Math.max(6, Math.round(toFiniteNumber(body.fps, 10))));
         const width = Math.min(640, Math.max(160, Math.round(toFiniteNumber(body.width, 400))));
-        const gifName = `gif_${Date.now()}_${label}.gif`;
+        const gifName = `gif_${uuidv4()}_${label}.gif`;
         const gifPath = path.join(__dirname, 'public', 'gifs', gifName);
-        const palettePath = path.join(__dirname, 'public', 'gifs', `palette_${Date.now()}.png`);
+        const palettePath = path.join(__dirname, 'public', 'gifs', `palette_${uuidv4()}.png`);
         await fs.ensureDir(path.dirname(gifPath));
 
         try {
@@ -2647,7 +2880,12 @@ app.post('/api/export/mp4', async (req, res) => {
         for (const id of pathIds) {
             const clip = await db.get('SELECT * FROM clips WHERE unique_id = ? AND project_id = ?', [id, safeProjectId]);
             if (!clip) throw createHttpError(`Clip not found: ${id}`, 404);
-            const fullPath = path.join(__dirname, 'public', stripLeadingSlashes(clip.filepath));
+            let fullPath;
+            try {
+                fullPath = safePublicAssetPath(clip.filepath, ['clips', 'videos']);
+            } catch (_) {
+                throw createHttpError('Clip file is missing', 404);
+            }
             if (!(await fs.pathExists(fullPath))) throw createHttpError(`Missing clip file: ${clip.name}`, 404);
             clips.push({ ...clip, fullPath });
         }
@@ -2823,10 +3061,14 @@ app.post('/api/ai/test', async (req, res) => {
         const response = await callAiChat(settings, 'Reply with exactly: OK', 'You are a connection test bot.');
         res.json({ success: true, response: String(response || '').slice(0, 200) });
     } catch (err) {
-        res.status(err.statusCode || 500).json({
+        const statusCode = Number(err && err.statusCode) >= 400 && Number(err && err.statusCode) < 500
+            ? Number(err.statusCode)
+            : 500;
+        const message = statusCode < 500 ? (err.message || 'Connection failed') : 'Connection failed';
+        res.status(statusCode).json({
             success: false,
-            error: err.message || 'Connection failed',
-            response: err.message || 'Connection failed'
+            error: message,
+            response: message
         });
     }
 });
@@ -2922,16 +3164,11 @@ app.post('/api/publish', async (req, res) => {
         const displayTitle = String(title || 'My Movie').trim() || 'My Movie';
         const exportName = safeExportFolderName(displayTitle);
         const exportPath = path.join(__dirname, 'public/exports', exportName);
-        await fs.emptyDir(exportPath);
-        await fs.ensureDir(path.join(exportPath, 'clips'));
-        await fs.ensureDir(path.join(exportPath, 'audio'));
-        await fs.ensureDir(path.join(exportPath, 'vendor'));
 
         const localVuePath = path.join(__dirname, 'public', 'vendor', 'vue.global.prod.js');
         if (!(await fs.pathExists(localVuePath))) {
             throw createHttpError('Local Vue runtime is missing from public/vendor', 500);
         }
-        await fs.copy(localVuePath, path.join(exportPath, 'vendor', 'vue.global.prod.js'));
 
         const allClips = await db.all('SELECT * FROM clips WHERE project_id = ?', [safeProjectId]);
         const allEdges = await db.all('SELECT * FROM edges WHERE project_id = ? ORDER BY trigger_time ASC', [safeProjectId]);
@@ -2949,12 +3186,72 @@ app.post('/api/publish', async (req, res) => {
             return res.status(400).json({ error: `Choice target not found for edge ${missingChoiceTarget.id}` });
         }
 
+        const clipSourcePaths = new Map();
         for (const clip of clips) {
-            const src = path.join(__dirname, 'public', clip.filepath); const filename = path.basename(clip.filepath); const dest = path.join(exportPath, 'clips', filename);
-            if(await fs.pathExists(src)) { await fs.copy(src, dest); clip.filepath = `clips/${filename}`; }
-            if(clip.thumbnail) { const thumbName = path.basename(clip.thumbnail); if(await fs.pathExists(path.join(__dirname, 'public', clip.thumbnail))) { await fs.copy(path.join(__dirname, 'public', clip.thumbnail), path.join(exportPath, 'clips', thumbName)); clip.thumbnail = `clips/${thumbName}`; } }
-            if(clip.bg_music) { const audSrc = path.join(__dirname, 'public', clip.bg_music); const audName = path.basename(clip.bg_music); if(await fs.pathExists(audSrc)) { await fs.copy(audSrc, path.join(exportPath, 'audio', audName)); clip.bg_music = `audio/${audName}`; } }
-            if(clip.subtitle_path) { const subSrc = path.join(__dirname, 'public', clip.subtitle_path); const subName = path.basename(clip.subtitle_path); if(await fs.pathExists(subSrc)) { await fs.copy(subSrc, path.join(exportPath, 'clips', subName)); clip.subtitle = `clips/${subName}`; } }
+            let sourcePath;
+            try {
+                sourcePath = safePublicAssetPath(clip.filepath, ['clips', 'videos']);
+            } catch (_) {
+                throw createHttpError('A clip has an invalid media path', 400);
+            }
+            if (!(await fs.pathExists(sourcePath))) throw createHttpError('A clip media file is missing', 404);
+            clipSourcePaths.set(clip.unique_id, sourcePath);
+        }
+
+        await fs.emptyDir(exportPath);
+        await fs.ensureDir(path.join(exportPath, 'clips'));
+        await fs.ensureDir(path.join(exportPath, 'audio'));
+        await fs.ensureDir(path.join(exportPath, 'vendor'));
+        await fs.copy(localVuePath, path.join(exportPath, 'vendor', 'vue.global.prod.js'));
+
+        for (const clip of clips) {
+            const sourcePath = clipSourcePaths.get(clip.unique_id);
+            const filename = path.basename(sourcePath);
+            await fs.copy(sourcePath, path.join(exportPath, 'clips', filename));
+            clip.filepath = `clips/${filename}`;
+
+            if (clip.thumbnail) {
+                try {
+                    const thumbPath = safePublicAssetPath(clip.thumbnail, ['thumbnails']);
+                    const thumbName = path.basename(thumbPath);
+                    if (await fs.pathExists(thumbPath)) {
+                        await fs.copy(thumbPath, path.join(exportPath, 'clips', thumbName));
+                        clip.thumbnail = `clips/${thumbName}`;
+                    } else {
+                        clip.thumbnail = '';
+                    }
+                } catch (_) {
+                    clip.thumbnail = '';
+                }
+            }
+            if (clip.bg_music) {
+                try {
+                    const audioPath = safePublicAssetPath(clip.bg_music, ['audio']);
+                    const audioName = path.basename(audioPath);
+                    if (await fs.pathExists(audioPath)) {
+                        await fs.copy(audioPath, path.join(exportPath, 'audio', audioName));
+                        clip.bg_music = `audio/${audioName}`;
+                    } else {
+                        clip.bg_music = null;
+                    }
+                } catch (_) {
+                    clip.bg_music = null;
+                }
+            }
+            if (clip.subtitle_path) {
+                try {
+                    const subtitlePath = safePublicAssetPath(clip.subtitle_path, ['subtitles']);
+                    const subtitleName = path.basename(subtitlePath);
+                    if (await fs.pathExists(subtitlePath)) {
+                        await fs.copy(subtitlePath, path.join(exportPath, 'clips', subtitleName));
+                        clip.subtitle = `clips/${subtitleName}`;
+                    } else {
+                        clip.subtitle = '';
+                    }
+                } catch (_) {
+                    clip.subtitle = '';
+                }
+            }
         }
 
         const logicBlocks = {};
@@ -3024,8 +3321,11 @@ app.use((err, req, res, next) => {
     }
     if (err) {
         console.error(err);
-        const statusCode = err && err.statusCode ? err.statusCode : 500;
-        return res.status(statusCode).json({ error: err.message || 'Server error' });
+        const candidateStatus = Number(err && err.statusCode);
+        const statusCode = Number.isInteger(candidateStatus) && candidateStatus >= 400 && candidateStatus <= 599
+            ? candidateStatus
+            : 500;
+        return res.status(statusCode).json({ error: statusCode < 500 ? (err.message || 'Request failed') : 'Server error' });
     }
     next();
 });
@@ -3036,8 +3336,11 @@ feedApp.use((err, req, res, next) => {
     }
     if (err) {
         console.error(err);
-        const statusCode = err && err.statusCode ? err.statusCode : 500;
-        return res.status(statusCode).json({ error: err.message || 'Server error' });
+        const candidateStatus = Number(err && err.statusCode);
+        const statusCode = Number.isInteger(candidateStatus) && candidateStatus >= 400 && candidateStatus <= 599
+            ? candidateStatus
+            : 500;
+        return res.status(statusCode).json({ error: statusCode < 500 ? (err.message || 'Request failed') : 'Server error' });
     }
     next();
 });
@@ -3061,4 +3364,3 @@ feedServer.on('error', (err) => {
     console.error(`Interactive feed failed to listen on ${FEED_HOST}:${FEED_PORT}`);
     console.error(err && err.stack ? err.stack : err);
 });
-
