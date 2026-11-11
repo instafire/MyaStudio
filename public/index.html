@@ -3315,7 +3315,7 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 statsData: [], publishTitle: 'My Movie', storySequence: [], publishing: false, publishUrl: '', feedUrl: '', linkCopied: false, embedCopied: false, projectColor: '#3b82f6', dragSequenceIdx: null, mp4ExportPath: [], mp4Crossfade: true, mp4ExportUrl: '',
                 exportsList: [], 
                 // Full Preview Engine
-                previewMode: false, previewPlaylistIndex: 0, previewClip: null, previewActiveBlocks: [], previewCurrentOptions: null, previewShowChoices: false, previewHistoryStack: [], previewGameState: {}, previewIsPlayingSubClip: false, previewFading: false, showPreviewVars: false, newPreviewVar: '', previewChoiceTimeLeft: null, previewChoiceTimerId: null,
+                previewMode: false, previewPlaylistIndex: 0, previewClip: null, previewActiveBlocks: [], previewCurrentOptions: null, previewShowChoices: false, previewHistoryStack: [], previewGameState: {}, previewIsPlayingSubClip: false, previewFading: false, showPreviewVars: false, newPreviewVar: '', previewChoiceTimeLeft: null, previewChoiceTimerId: null, previewClipTimeoutId: null, previewClipTimeLeft: null,
                 // Advanced Editor
                 editorSourceId: null, editorClips: [], timelineZoom: 100, timelineScroll: 0, playheadTime: 0, snapEnabled: true, selectedTimelineClipId: null, timelineThumbnails: [], timelineWaveUrl: null, showClipList: true, showAdvProps: true, isDraggingPlayhead: false, isDraggingTrim: null,
                 positionHistory: [], isProcessing: false, _previewTimeoutFired: false, _toastTimer: null, previewTimeLeft: null, previewTimerId: null,
@@ -5759,6 +5759,7 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 this.showPreviewVars = false;
                 this.newPreviewVar = '';
                 this.clearPreviewChoiceTimer();
+                this.clearPreviewClipTimeout();
                 if(this.$refs.previewPlayer) this.$refs.previewPlayer.pause();
                 if(this.$refs.previewBgm) this.$refs.previewBgm.pause();
             },
@@ -5771,6 +5772,8 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 this.previewShowChoices = false;
                 this._previewTimeoutFired = false;
                 this.previewFading = true;
+                this.clearPreviewClipTimeout();
+                this.startPreviewClipTimeout(nextClip);
                 
                 // Construct logic blocks similar to server-side publish logic
                 const relevantEdges = this.edges.filter(e => e.from_id === id);
@@ -5808,24 +5811,6 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                         setTimeout(() => { this.previewFading = false; }, 60);
                     });
                 }, 200);
-                this.previewActiveBlocks = Object.values(blocks).sort((a,b) => a.time - b.time);
-
-                if(forceTime > 0) this.previewActiveBlocks = this.previewActiveBlocks.filter(b => b.time > forceTime);
-
-                this.$nextTick(() => {
-                    const v = this.$refs.previewPlayer;
-                    if(!v) return;
-                    v.src = nextClip.filepath;
-                    v.currentTime = forceTime;
-                    v.muted = !!nextClip.mute_audio;
-                    v.play().catch(() => {});
-                    
-                    // BGM
-                    const a = this.$refs.previewBgm;
-                    if(nextClip.bg_music){
-                        if(!a.src.includes(nextClip.bg_music)){ a.src=nextClip.bg_music; a.volume=0.3; a.play().catch(e=>{}); }
-                    } else { a.pause(); }
-                });
             },
             onPreviewTimeUpdate() {
                 if(this.previewShowChoices || this.previewIsPlayingSubClip) return;
@@ -5945,6 +5930,29 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
             clearPreviewChoiceTimer() {
                 if (this.previewChoiceTimerId) { clearInterval(this.previewChoiceTimerId); this.previewChoiceTimerId = null; }
                 this.previewChoiceTimeLeft = null;
+            },
+            startPreviewClipTimeout(clip) {
+                this.clearPreviewClipTimeout();
+                const seconds = Number(clip && clip.timeout_seconds) || 0;
+                const targetId = clip && clip.timeout_to_id;
+                if (seconds <= 0 || !targetId) { this.previewClipTimeLeft = null; return; }
+                if (!this.clips.some(c => c.unique_id === targetId)) { this.previewClipTimeLeft = null; return; }
+                this.previewClipTimeLeft = seconds;
+                this.previewClipTimeoutId = setInterval(() => {
+                    this.previewClipTimeLeft = Math.max(0, (this.previewClipTimeLeft || 0) - 0.1);
+                    if (this.previewClipTimeLeft <= 0) {
+                        this.clearPreviewClipTimeout();
+                        // Only fire while still on this clip with no choice made.
+                        if (!this.previewClip || this.previewClip.unique_id !== clip.unique_id || this._previewTimeoutFired) return;
+                        this._previewTimeoutFired = true;
+                        this.clearPreviewChoiceTimer();
+                        this.loadPreviewClip(targetId, 0);
+                    }
+                }, 100);
+            },
+            clearPreviewClipTimeout() {
+                if (this.previewClipTimeoutId) { clearInterval(this.previewClipTimeoutId); this.previewClipTimeoutId = null; }
+                this.previewClipTimeLeft = null;
             },
             addPreviewVar() {
                 const key = String(this.newPreviewVar || '').trim();
