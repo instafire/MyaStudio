@@ -11,16 +11,34 @@ const ffprobeStatic = require('ffprobe-static');
 const multer = require('multer');
 const { buildPublishedPlayerHtml, collectReachableClipIds } = require('./lib/published-player');
 const { srtToVtt, looksLikeValidCues } = require('./lib/subtitles');
+const security = require('./lib/security');
 const {
     buildFallbackMoviePlan,
     buildMovieAgentPrompt,
     normalizeMoviePlan
 } = require('./lib/movie-agent');
 
-const HOST = process.env.HOST || '127.0.0.1';
-const PORT = Number(process.env.PORT || 3000);
-const FEED_HOST = process.env.FEED_HOST || HOST;
-const FEED_PORT = Number(process.env.FEED_PORT || (PORT === 3000 ? 3001 : PORT + 1));
+// Loopback-only listeners with strict port parsing (issue #1): an unsafe
+// HOST/FEED_HOST (e.g. 0.0.0.0) or a malformed PORT refuses to start instead
+// of silently binding somewhere unexpected.
+let HOST;
+let PORT;
+let FEED_HOST;
+let FEED_PORT;
+let TRUSTED_ORIGINS;
+try {
+    HOST = security.parseLoopbackHost(process.env.HOST, 'HOST', '127.0.0.1');
+    PORT = security.parsePort(process.env.PORT, 'PORT', 3000);
+    FEED_HOST = security.parseLoopbackHost(process.env.FEED_HOST, 'FEED_HOST', HOST);
+    FEED_PORT = security.parsePort(process.env.FEED_PORT, 'FEED_PORT', PORT === 3000 ? 3001 : PORT + 1);
+    // Extra browser Origins allowed through CORS, e.g. a reverse-proxy host
+    // such as https://myastudio.genznewz.com. Loopback origins are always
+    // allowed; anything else needs to be listed here (see README).
+    TRUSTED_ORIGINS = security.parseTrustedOrigins(process.env.TRUSTED_ORIGINS);
+} catch (err) {
+    console.error(`Refusing to start: ${err.message}`);
+    process.exit(1);
+}
 const app = express();
 const feedApp = express();
 
@@ -51,7 +69,8 @@ const DEFAULT_AI_SETTINGS = {
     ollamaHost: 'http://127.0.0.1:11434'
 };
 
-app.use(cors());
+app.use(security.securityHeaders);
+app.use(cors({ origin: security.corsOriginChecker(TRUSTED_ORIGINS) }));
 app.use(express.json());
 app.use((req, res, next) => {
     if (req.path === '/' || req.path === '/index.html') {
@@ -61,7 +80,8 @@ app.use((req, res, next) => {
 });
 app.use(express.static(path.join(__dirname, 'public')));
 
-feedApp.use(cors());
+feedApp.use(security.securityHeaders);
+feedApp.use(cors({ origin: security.corsOriginChecker(TRUSTED_ORIGINS) }));
 feedApp.use(express.json());
 feedApp.use((req, res, next) => {
     if (req.path === '/' || req.path === '/index.html') {
@@ -125,7 +145,15 @@ const storage = multer.diskStorage({
 });
 const upload = multer({
     storage,
-    limits: { fileSize: 1024 * 1024 * 800 }
+    limits: { fileSize: 1024 * 1024 * 800 },
+    fileFilter: (req, file, cb) => {
+        try {
+            security.validateMediaUpload(file);
+            cb(null, true);
+        } catch (err) {
+            cb(err);
+        }
+    }
 });
 const subtitleStorage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, path.join(__dirname, 'public', 'subtitles')),
@@ -135,9 +163,12 @@ const subtitleUpload = multer({
     storage: subtitleStorage,
     limits: { fileSize: 1024 * 512 },
     fileFilter: (req, file, cb) => {
-        const ext = path.extname(file.originalname || '').toLowerCase();
-        if (ext === '.vtt' || ext === '.srt') return cb(null, true);
-        cb(createHttpError('Only .vtt and .srt subtitle files are accepted', 400));
+        try {
+            security.validateSubtitleUpload(file);
+            cb(null, true);
+        } catch (err) {
+            cb(err);
+        }
     }
 });
 
@@ -193,7 +224,9 @@ function createHttpError(message, statusCode) {
 }
 
 function buildInsertStatement(table, row, overrides = {}, omitKeys = []) {
-    const payload = { ...row, ...overrides };
+    // Imported/duplicated rows pass through the column whitelist first, so a
+    // crafted import file cannot smuggle arbitrary identifiers into SQL.
+    const payload = security.pickAllowedColumns(table, { ...row, ...overrides });
     omitKeys.forEach(key => delete payload[key]);
     const columns = Object.keys(payload);
     const placeholders = columns.map(() => '?').join(', ');
@@ -270,7 +303,7 @@ async function getVideoOrThrow(sourceId) {
     if (!sourceId) throw createHttpError('sourceId is required', 400);
     const video = await db.get('SELECT * FROM videos WHERE id = ?', [sourceId]);
     if (!video) throw createHttpError('Source video not found', 404);
-    const sourcePath = path.join(__dirname, 'public', video.filepath);
+    const sourcePath = security.resolvePublicPath(path.join(__dirname, 'public'), video.filepath);
     if (!(await fs.pathExists(sourcePath))) throw createHttpError('Source video file is missing', 404);
     return { video, sourcePath };
 }
@@ -341,8 +374,11 @@ function normalizeProjectSynopsis(value) {
 }
 
 function sendApiError(res, err, fallback = 'Server error') {
-    const statusCode = err && err.statusCode ? err.statusCode : 500;
-    const message = err && err.message ? err.message : fallback;
+    const statusCode = (err && (err.statusCode || err.status)) || 500;
+    // Unexpected (5xx) errors are sanitized: the caller sees a generic
+    // message while the detail stays in the server log. Client (4xx)
+    // errors keep their message — they are intentional and safe to show.
+    const message = statusCode >= 500 ? fallback : (err && err.message ? err.message : fallback);
     res.status(statusCode).json({ error: message });
 }
 
@@ -378,7 +414,7 @@ async function reencodeClipFile(clip, { filter = 'none', speed = 1, volume = 1 }
     const safeFilter = normalizeFilter(filter);
     const safeSpeed = normalizeSpeed(speed);
     const safeVolume = normalizeVolume(volume);
-    const sourcePath = path.join(__dirname, 'public', stripLeadingSlashes(clip.filepath));
+    const sourcePath = security.resolvePublicPath(path.join(__dirname, 'public'), clip.filepath);
     if (!(await fs.pathExists(sourcePath))) throw createHttpError('Clip file is missing', 404);
 
     const newId = uuidv4();
@@ -780,15 +816,22 @@ function formatFeedItem(row) {
         likeCount: toFiniteNumber(row.like_count, 0),
         publishedAt: row.published_at,
         updatedAt: row.updated_at || row.published_at,
-        playerUrl: buildStudioUrl(`exports/${row.export_name}/index.html`),
-        posterUrl: row.poster_path ? buildStudioUrl(`exports/${row.export_name}/${stripLeadingSlashes(row.poster_path)}`) : null,
+        playerUrl: security.validateExportName(row.export_name)
+            ? buildStudioUrl(`exports/${row.export_name}/index.html`)
+            : null,
+        // Stored poster metadata is validated before any URL is built from
+        // it, so a crafted poster_path can never smuggle a traversal or an
+        // off-site URL into the feed.
+        posterUrl: (security.validateExportName(row.export_name) && security.validatePosterPath(row.poster_path))
+            ? buildStudioUrl(`exports/${row.export_name}/${stripLeadingSlashes(row.poster_path)}`)
+            : null,
         studioUrl: `${STUDIO_PUBLIC_ORIGIN}/`
     };
 }
 
 async function listPublishedMovies() {
     const rows = await db.all('SELECT * FROM published_movies ORDER BY datetime(updated_at) DESC, id DESC');
-    return rows.map(formatFeedItem);
+    return rows.filter(row => security.validateExportName(row.export_name)).map(formatFeedItem);
 }
 
 async function upsertPublishedMovie(entry) {
@@ -1009,9 +1052,19 @@ async function reconcilePublishedMovies() {
             continue;
         }
 
-        const posterMissing = row.poster_path
-            ? !(await fs.pathExists(path.join(exportDir, exportName, stripLeadingSlashes(row.poster_path))))
-            : true;
+        // The stored poster path is validated and confined to the export
+        // folder before any filesystem check, so a crafted value cannot
+        // probe paths outside the export.
+        let posterMissing = true;
+        if (row.poster_path && security.validatePosterPath(row.poster_path)) {
+            try {
+                posterMissing = !(await fs.pathExists(
+                    security.resolveConfinedPath(path.join(exportDir, exportName), row.poster_path)
+                ));
+            } catch (_) {
+                posterMissing = true;
+            }
+        }
         if (posterMissing || !row.title) {
             await db.run(
                 `UPDATE published_movies
@@ -1028,8 +1081,12 @@ async function reconcilePublishedMovies() {
 async function removePublicAssetIfUnused(webPath) {
     const normalized = String(webPath || '').trim();
     if (!normalized) return;
-    const relativePath = normalized.replace(/^\/+/, '');
-    if (!relativePath || relativePath.includes('..')) return;
+    let absPath;
+    try {
+        absPath = security.resolvePublicPath(path.join(__dirname, 'public'), normalized);
+    } catch (_) {
+        return; // a path outside the media library is never ours to delete
+    }
     const usage = await db.get(
         `SELECT
             (SELECT COUNT(*) FROM videos WHERE filepath = ? OR thumbnail = ?) +
@@ -1037,7 +1094,7 @@ async function removePublicAssetIfUnused(webPath) {
         [normalized, normalized, normalized, normalized, normalized]
     );
     if (toFiniteNumber(usage && usage.total, 0) > 0) return;
-    await fs.remove(path.join(__dirname, 'public', relativePath));
+    await fs.remove(absPath);
 }
 
 async function removeUnusedPublicAssets(paths) {
@@ -1050,7 +1107,7 @@ async function removeUnusedPublicAssets(paths) {
 // --- ROUTES ---
 const DB_OPTIONAL_API_PATHS = new Set(['/audio', '/exports']);
 
-app.use('/api', (req, res, next) => {
+app.use('/api', security.requireMutationContentType, (req, res, next) => {
     if (DB_OPTIONAL_API_PATHS.has(req.path)) {
         return next();
     }
@@ -1062,7 +1119,7 @@ app.use('/api', (req, res, next) => {
     }
 });
 
-feedApp.use('/api', (req, res, next) => {
+feedApp.use('/api', security.requireMutationContentType, (req, res, next) => {
     try {
         ensureDbReady();
         next();
@@ -1321,7 +1378,7 @@ app.post('/api/project/duplicate', async (req, res) => {
                         unique_id: sourceClipIdMap.get(clip.unique_id),
                         project_id: newProjectId,
                         source_video_id: clip.source_video_id ? (sourceVideoIdMap.get(clip.source_video_id) || null) : null,
-                        timeout_to_id: clip.timeout_to_id ? (sourceClipIdMap.get(clip.timeout_to_id) || clip.timeout_to_id) : clip.timeout_to_id
+                        timeout_to_id: clip.timeout_to_id ? (sourceClipIdMap.get(clip.timeout_to_id) || null) : null
                     },
                     ['id']
                 );
@@ -1335,8 +1392,8 @@ app.post('/api/project/duplicate', async (req, res) => {
                     edge,
                     {
                         project_id: newProjectId,
-                        from_id: sourceClipIdMap.get(edge.from_id) || edge.from_id,
-                        to_id: edge.to_id ? (sourceClipIdMap.get(edge.to_id) || edge.to_id) : edge.to_id
+                        from_id: sourceClipIdMap.get(edge.from_id) || null,
+                        to_id: edge.to_id ? (sourceClipIdMap.get(edge.to_id) || null) : null
                     },
                     ['id']
                 );
@@ -1505,7 +1562,7 @@ app.get('/api/exports', async (req, res) => {
 app.post('/api/delete_export', async (req, res) => {
     try {
         const raw = String(req.body.name || '');
-        if (!/^[a-z0-9_]+$/i.test(raw)) return res.status(400).json({ error: 'Invalid export name' });
+        if (!security.validateExportName(raw)) return res.status(400).json({ error: 'Invalid export name' });
         await fs.remove(path.join(__dirname, 'public/exports', raw));
         await db.run('DELETE FROM published_movies WHERE export_name = ?', [raw]);
         res.json({ success: true });
@@ -1526,18 +1583,25 @@ async function finalizeUploadedMedia({ absPath, filename, originalname, mimetype
     if (String(mimetype || '').startsWith('audio')) {
         return { success: true, type: 'audio', path: `/audio/${filename}`, name: originalname };
     }
+    // A failed probe/thumbnail/insert leaves an unreferenced file behind;
+    // remove it so invalid media never accumulates in the media library.
     const webPath = `/videos/${filename}`;
-    const duration = await probeDuration(absPath);
-    const thumbnail = await generateThumbnail(absPath, filename);
-    const result = await db.run(
-        'INSERT INTO videos (project_id, filename, filepath, thumbnail, duration) VALUES (?, ?, ?, ?, ?)',
-        [projectId, originalname, webPath, thumbnail, duration]
-    );
-    const clipId = uuidv4();
-    await db.run(
-        'INSERT INTO clips (unique_id, project_id, name, filepath, thumbnail, source_video_id, duration, x, y, builder_visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
-        [clipId, projectId, `FULL: ${originalname}`, webPath, thumbnail, result.lastID, duration, 100, 100]
-    );
+    try {
+        const duration = await probeDuration(absPath);
+        const thumbnail = await generateThumbnail(absPath, filename);
+        const result = await db.run(
+            'INSERT INTO videos (project_id, filename, filepath, thumbnail, duration) VALUES (?, ?, ?, ?, ?)',
+            [projectId, originalname, webPath, thumbnail, duration]
+        );
+        const clipId = uuidv4();
+        await db.run(
+            'INSERT INTO clips (unique_id, project_id, name, filepath, thumbnail, source_video_id, duration, x, y, builder_visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
+            [clipId, projectId, `FULL: ${originalname}`, webPath, thumbnail, result.lastID, duration, 100, 100]
+        );
+    } catch (err) {
+        await fs.remove(absPath).catch(() => {});
+        throw err;
+    }
     return { success: true, type: 'video' };
 }
 
@@ -1607,9 +1671,19 @@ app.post('/api/upload/complete', async (req, res) => {
             return res.status(400).json({ error: 'Incomplete upload, please retry' });
         }
         const fileName = String(body.fileName || 'upload.bin');
-        const ext = path.extname(fileName).toLowerCase() || '.mp4';
+        // The reassembled file gets the same media validation as a
+        // single-shot upload: extension allowlist + MIME family agreement.
+        // A rejected file's reassembled parts are removed, not left behind.
+        let validated;
+        try {
+            validated = security.validateMediaUpload({ originalname: fileName, mimetype: body.mimeType });
+        } catch (err) {
+            await fs.remove(partPath).catch(() => {});
+            throw err;
+        }
+        const ext = validated.ext;
         const filename = Date.now() + ext;
-        const isAudio = String(body.mimeType || '').startsWith('audio');
+        const isAudio = validated.kind === 'audio';
         const destDir = path.join(__dirname, 'public', isAudio ? 'audio' : 'videos');
         await fs.ensureDir(destDir);
         const absPath = path.join(destDir, filename);
@@ -2023,7 +2097,7 @@ app.post('/api/clip/split', async (req, res) => {
         if (!(splitAt > 0.15) || !(splitAt < duration - 0.15)) {
             throw createHttpError('Split point must be inside the clip (not near the ends)', 400);
         }
-        const sourcePath = path.join(__dirname, 'public', stripLeadingSlashes(clip.filepath));
+        const sourcePath = security.resolvePublicPath(path.join(__dirname, 'public'), clip.filepath);
         if (!(await fs.pathExists(sourcePath))) throw createHttpError('Clip file is missing', 404);
 
         const makePart = async (start, end, suffix) => {
@@ -2080,7 +2154,7 @@ app.post('/api/clip/thumbnail', async (req, res) => {
         const clipId = parseUniqueId(id, 'id');
         const clip = await db.get('SELECT * FROM clips WHERE unique_id = ? AND project_id = ?', [clipId, safeProjectId]);
         if(!clip) return res.status(404).json({error: "Clip not found"});
-        const fullPath = path.join(__dirname, 'public', clip.filepath);
+        const fullPath = security.resolvePublicPath(path.join(__dirname, 'public'), clip.filepath);
         if (!(await fs.pathExists(fullPath))) return res.status(404).json({ error: 'Clip file is missing' });
         const filename = path.basename(clip.filepath);
         const newThumb = await generateThumbnail(fullPath, filename, time);
@@ -2108,7 +2182,7 @@ app.post('/api/clip/audio', async (req, res) => {
                 throw createHttpError('bgMusic must reference an /audio file', 400);
             }
             if (nextBgMusic) {
-                const bgMusicPath = path.join(__dirname, 'public', nextBgMusic.replace(/^\/+/, ''));
+                const bgMusicPath = security.resolvePublicPath(path.join(__dirname, 'public'), nextBgMusic);
                 if (!(await fs.pathExists(bgMusicPath))) {
                     throw createHttpError('Audio file not found', 404);
                 }
@@ -2149,6 +2223,10 @@ app.post('/api/clip/audio', async (req, res) => {
 });
 
 app.post('/api/clip/subtitle', subtitleUpload.single('file'), async (req, res) => {
+    // `committed` tracks whether the database already points at the newly
+    // uploaded file: only then must a failure leave it alone. A failed
+    // upload must never delete captions the database still references.
+    let committed = false;
     try {
         ensureDbReady();
         const body = req.body || {};
@@ -2164,12 +2242,24 @@ app.post('/api/clip/subtitle', subtitleUpload.single('file'), async (req, res) =
             return res.status(400).json({ error: 'Subtitle file has no valid cues' });
         }
         await fs.writeFile(req.file.path, vtt, 'utf8');
-        if (existing.subtitle_path) await fs.remove(path.join(__dirname, 'public', existing.subtitle_path)).catch(() => {});
         const webPath = `/subtitles/${path.basename(req.file.path)}`;
+        const previousPath = existing.subtitle_path || null;
         await db.run('UPDATE clips SET subtitle_path = ? WHERE unique_id = ? AND project_id = ?', [webPath, clipId, safeProjectId]);
+        committed = true;
+        // The old captions are removed only after the database points at the
+        // new file, only when no clip still references them, and only inside
+        // the media library.
+        if (previousPath && previousPath !== webPath) {
+            const stillReferenced = await db.get('SELECT COUNT(*) AS total FROM clips WHERE subtitle_path = ?', [previousPath]);
+            if (toFiniteNumber(stillReferenced && stillReferenced.total, 0) === 0) {
+                try {
+                    await fs.remove(security.resolvePublicPath(path.join(__dirname, 'public'), previousPath));
+                } catch (_) { /* stale path: database is already consistent */ }
+            }
+        }
         res.json({ success: true, path: webPath });
     } catch (err) {
-        if (req.file) await fs.remove(req.file.path).catch(() => {});
+        if (req.file && !committed) await fs.remove(req.file.path).catch(() => {});
         sendApiError(res, err, 'Subtitle upload failed');
     }
 });
@@ -2182,8 +2272,18 @@ app.post('/api/clip/subtitle/delete', async (req, res) => {
         const clipId = parseUniqueId(body.unique_id);
         const existing = await db.get('SELECT * FROM clips WHERE unique_id = ? AND project_id = ?', [clipId, safeProjectId]);
         if (!existing) return res.status(404).json({ error: 'Clip not found' });
-        if (existing.subtitle_path) await fs.remove(path.join(__dirname, 'public', existing.subtitle_path)).catch(() => {});
+        // Clear the reference first: if the file removal then fails, the
+        // database is already consistent and the file is just orphaned.
+        const previousPath = existing.subtitle_path || null;
         await db.run('UPDATE clips SET subtitle_path = NULL WHERE unique_id = ? AND project_id = ?', [clipId, safeProjectId]);
+        if (previousPath) {
+            const stillReferenced = await db.get('SELECT COUNT(*) AS total FROM clips WHERE subtitle_path = ?', [previousPath]);
+            if (toFiniteNumber(stillReferenced && stillReferenced.total, 0) === 0) {
+                try {
+                    await fs.remove(security.resolvePublicPath(path.join(__dirname, 'public'), previousPath));
+                } catch (_) { /* stale path: database is already consistent */ }
+            }
+        }
         res.json({ success: true });
     } catch (err) {
         sendApiError(res, err);
@@ -2434,13 +2534,19 @@ app.post('/api/project/import', async (req, res) => {
 
             for (const edge of edges) {
                 if (!edge || !edge.from_id) continue;
+                // Imported references are remapped through the id maps; an
+                // edge from a clip that was not imported is dropped, and a
+                // target that was not imported becomes null, so the import
+                // can never point at another project's rows.
+                const fromId = security.remapImportedReference(sourceClipIdMap, edge.from_id);
+                if (!fromId) continue;
                 const edgeInsert = buildInsertStatement(
                     'edges',
                     edge,
                     {
                         project_id: newProjectId,
-                        from_id: sourceClipIdMap.get(edge.from_id) || edge.from_id,
-                        to_id: edge.to_id ? (sourceClipIdMap.get(edge.to_id) || edge.to_id) : edge.to_id
+                        from_id: fromId,
+                        to_id: security.remapImportedReference(sourceClipIdMap, edge.to_id)
                     },
                     ['id']
                 );
@@ -2577,7 +2683,7 @@ app.post('/api/clips/batch_audio', async (req, res) => {
         const bgMusic = req.body && req.body.bgMusic ? String(req.body.bgMusic).trim() : null;
         if (bgMusic) {
             if (!bgMusic.startsWith('/audio/')) throw createHttpError('bgMusic must reference an /audio file', 400);
-            const bgMusicPath = path.join(__dirname, 'public', stripLeadingSlashes(bgMusic));
+            const bgMusicPath = security.resolvePublicPath(path.join(__dirname, 'public'), bgMusic);
             if (!(await fs.pathExists(bgMusicPath))) throw createHttpError('Audio file not found', 404);
         }
         let updated = 0;
@@ -2602,7 +2708,7 @@ app.post('/api/clip/thumbnails', async (req, res) => {
         const interval = Math.max(0.5, toFiniteNumber(req.body && req.body.interval, 2));
         const clip = await db.get('SELECT * FROM clips WHERE unique_id = ? AND project_id = ?', [clipId, safeProjectId]);
         if (!clip) return res.status(404).json({ error: 'Clip not found' });
-        const fullPath = path.join(__dirname, 'public', stripLeadingSlashes(clip.filepath));
+        const fullPath = security.resolvePublicPath(path.join(__dirname, 'public'), clip.filepath);
         if (!(await fs.pathExists(fullPath))) return res.status(404).json({ error: 'Clip file is missing' });
         const duration = toFiniteNumber(clip.duration, 0) || await probeDuration(fullPath);
         const timestamps = [];
@@ -2636,7 +2742,7 @@ app.post('/api/edge/thumbnail', async (req, res) => {
                 [edge.to_id, safeProjectId]
             );
             if (!target) throw createHttpError('Target clip not found', 404);
-            const fullPath = path.join(__dirname, 'public', stripLeadingSlashes(target.filepath));
+            const fullPath = security.resolvePublicPath(path.join(__dirname, 'public'), target.filepath);
             if (!(await fs.pathExists(fullPath))) throw createHttpError('Target clip file is missing', 404);
             thumbnail = await generateThumbnail(
                 fullPath,
@@ -2671,7 +2777,7 @@ app.post('/api/export/gif', async (req, res) => {
             const clipId = parseUniqueId(body.clipId, 'clipId');
             const clip = await db.get('SELECT * FROM clips WHERE unique_id = ? AND project_id = ?', [clipId, safeProjectId]);
             if (!clip) return res.status(404).json({ error: 'Clip not found' });
-            sourcePath = path.join(__dirname, 'public', stripLeadingSlashes(clip.filepath));
+            sourcePath = security.resolvePublicPath(path.join(__dirname, 'public'), clip.filepath);
             label = String(clip.name || 'clip').replace(/[^a-z0-9]+/gi, '_').slice(0, 40) || 'clip';
             if (endTime == null) {
                 endTime = toFiniteNumber(clip.duration, 0);
@@ -2760,7 +2866,7 @@ app.post('/api/export/mp4', async (req, res) => {
         for (const id of pathIds) {
             const clip = await db.get('SELECT * FROM clips WHERE unique_id = ? AND project_id = ?', [id, safeProjectId]);
             if (!clip) throw createHttpError(`Clip not found: ${id}`, 404);
-            const fullPath = path.join(__dirname, 'public', stripLeadingSlashes(clip.filepath));
+            const fullPath = security.resolvePublicPath(path.join(__dirname, 'public'), clip.filepath);
             if (!(await fs.pathExists(fullPath))) throw createHttpError(`Missing clip file: ${clip.name}`, 404);
             clips.push({ ...clip, fullPath });
         }
@@ -2936,10 +3042,13 @@ app.post('/api/ai/test', async (req, res) => {
         const response = await callAiChat(settings, 'Reply with exactly: OK', 'You are a connection test bot.');
         res.json({ success: true, response: String(response || '').slice(0, 200) });
     } catch (err) {
-        res.status(err.statusCode || 500).json({
+        // Provider failures can carry URLs, keys, or stack detail; the
+        // client only learns the connection failed.
+        const safe = security.sanitizeErrorMessage(err, 'Connection failed');
+        res.status((err && (err.statusCode || err.status)) || 500).json({
             success: false,
-            error: err.message || 'Connection failed',
-            response: err.message || 'Connection failed'
+            error: safe,
+            response: safe
         });
     }
 });
@@ -3063,11 +3172,11 @@ app.post('/api/publish', async (req, res) => {
         }
 
         for (const clip of clips) {
-            const src = path.join(__dirname, 'public', clip.filepath); const filename = path.basename(clip.filepath); const dest = path.join(exportPath, 'clips', filename);
+            const src = security.resolvePublicPath(path.join(__dirname, 'public'), clip.filepath); const filename = path.basename(clip.filepath); const dest = path.join(exportPath, 'clips', filename);
             if(await fs.pathExists(src)) { await fs.copy(src, dest); clip.filepath = `clips/${filename}`; }
-            if(clip.thumbnail) { const thumbName = path.basename(clip.thumbnail); if(await fs.pathExists(path.join(__dirname, 'public', clip.thumbnail))) { await fs.copy(path.join(__dirname, 'public', clip.thumbnail), path.join(exportPath, 'clips', thumbName)); clip.thumbnail = `clips/${thumbName}`; } }
-            if(clip.bg_music) { const audSrc = path.join(__dirname, 'public', clip.bg_music); const audName = path.basename(clip.bg_music); if(await fs.pathExists(audSrc)) { await fs.copy(audSrc, path.join(exportPath, 'audio', audName)); clip.bg_music = `audio/${audName}`; } }
-            if(clip.subtitle_path) { const subSrc = path.join(__dirname, 'public', clip.subtitle_path); const subName = path.basename(clip.subtitle_path); if(await fs.pathExists(subSrc)) { await fs.copy(subSrc, path.join(exportPath, 'clips', subName)); clip.subtitle = `clips/${subName}`; } }
+            if(clip.thumbnail) { const thumbName = path.basename(clip.thumbnail); if(await fs.pathExists(security.resolvePublicPath(path.join(__dirname, 'public'), clip.thumbnail))) { await fs.copy(security.resolvePublicPath(path.join(__dirname, 'public'), clip.thumbnail), path.join(exportPath, 'clips', thumbName)); clip.thumbnail = `clips/${thumbName}`; } }
+            if(clip.bg_music) { const audSrc = security.resolvePublicPath(path.join(__dirname, 'public'), clip.bg_music); const audName = path.basename(clip.bg_music); if(await fs.pathExists(audSrc)) { await fs.copy(audSrc, path.join(exportPath, 'audio', audName)); clip.bg_music = `audio/${audName}`; } }
+            if(clip.subtitle_path) { const subSrc = security.resolvePublicPath(path.join(__dirname, 'public'), clip.subtitle_path); const subName = path.basename(clip.subtitle_path); if(await fs.pathExists(subSrc)) { await fs.copy(subSrc, path.join(exportPath, 'clips', subName)); clip.subtitle = `clips/${subName}`; } }
         }
 
         const logicBlocks = {};
@@ -3137,8 +3246,8 @@ app.use((err, req, res, next) => {
     }
     if (err) {
         console.error(err);
-        const statusCode = err && err.statusCode ? err.statusCode : 500;
-        return res.status(statusCode).json({ error: err.message || 'Server error' });
+        const statusCode = err.statusCode || err.status || 500;
+        return res.status(statusCode).json({ error: statusCode >= 500 ? 'Server error' : (err.message || 'Server error') });
     }
     next();
 });
@@ -3149,8 +3258,8 @@ feedApp.use((err, req, res, next) => {
     }
     if (err) {
         console.error(err);
-        const statusCode = err && err.statusCode ? err.statusCode : 500;
-        return res.status(statusCode).json({ error: err.message || 'Server error' });
+        const statusCode = err.statusCode || err.status || 500;
+        return res.status(statusCode).json({ error: statusCode >= 500 ? 'Server error' : (err.message || 'Server error') });
     }
     next();
 });

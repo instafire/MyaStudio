@@ -60,6 +60,15 @@ npm start
 - **Studio Interface**: [http://127.0.0.1:3000](http://127.0.0.1:3000)
 - **Interactive Feed**: [http://127.0.0.1:3001](http://127.0.0.1:3001)
 
+### Security & deployment
+
+MyaStudio is a local-only server. It has no authentication, so it must never be exposed directly to a network you do not trust:
+
+- **Loopback only.** `HOST` / `FEED_HOST` default to `127.0.0.1` and the server refuses to start with any other bind address (`0.0.0.0`, a LAN IP, …). `PORT` / `FEED_PORT` must be decimal ports 1–65535.
+- **Reverse proxy, not a public bind.** To reach the studio from outside the machine, put a reverse proxy (e.g. nginx, an SSH `-R` tunnel) in front of the loopback ports and set `TRUSTED_ORIGINS` to the public origin(s), e.g. `TRUSTED_ORIGINS=https://myastudio.example.com`. Browser requests from any other origin are rejected, and state-changing API requests must use JSON or multipart media bodies.
+- **Uploads.** Media uploads accept video/audio files only (`.mp4`, `.mov`, `.webm`, `.mkv`, `.avi`, `.mp3`, `.wav`, `.ogg`, `.m4a`, `.flac`, `.aac`); subtitles accept `.vtt` / `.srt` only. Stored media paths are confined to `public/`; project imports whitelist their SQL columns and remap references to the imported project.
+- **Errors.** Unexpected server errors return a generic message; detail stays in the server log.
+
 ---
 
 ## ⌨️ Keyboard Shortcuts
