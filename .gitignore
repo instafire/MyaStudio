@@ -56,6 +56,7 @@ public/exports/*
 *.jpg
 *.jpeg
 *.png
+!public/og-image.png
 *.gif
 *.webp
 *.bmp

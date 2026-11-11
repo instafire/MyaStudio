@@ -3,12 +3,103 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Mya Studio — Interactive Video Maker & Branching Story Creator</title>
-    <meta name="description" content="Create interactive videos with Mya Studio's visual graph editor. Build branching choose-your-own-adventure stories, add choice variables, and export standalone HTML players. Free and open source.">
-    <meta property="og:title" content="Mya Studio — Interactive Video Creator">
-    <meta property="og:description" content="Create branching interactive movies with a visual graph editor.">
+    <title>Interactive Video Maker — Mya Studio | Branching Stories</title>
+    <meta name="description" content="Mya Studio is a free, open source interactive video maker. Build branching choose-your-own-adventure stories in a visual graph editor and export HTML players.">
+    <link rel="canonical" href="https://myastudio.genznewz.com/interactive-video-maker">
+    <meta name="theme-color" content="#000000">
+    <meta property="og:title" content="Interactive Video Maker — Mya Studio | Branching Stories">
+    <meta property="og:description" content="Mya Studio is a free, open source interactive video maker. Build branching choose-your-own-adventure stories in a visual graph editor and export HTML players.">
     <meta property="og:type" content="website">
+    <meta property="og:url" content="https://myastudio.genznewz.com/interactive-video-maker">
+    <meta property="og:image" content="https://myastudio.genznewz.com/og-image.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Mya Studio — free open source interactive video maker">
     <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Interactive Video Maker — Mya Studio | Branching Stories">
+    <meta name="twitter:description" content="Mya Studio is a free, open source interactive video maker. Build branching choose-your-own-adventure stories in a visual graph editor and export HTML players.">
+    <meta name="twitter:image" content="https://myastudio.genznewz.com/og-image.png">
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Mya Studio",
+        "applicationCategory": "MultimediaApplication",
+        "operatingSystem": "Windows, macOS, Linux",
+        "description": "Create interactive choose-your-own-adventure videos with a visual graph editor, timeline logic, and standalone HTML export.",
+        "url": "https://myastudio.genznewz.com/interactive-video-maker",
+        "isAccessibleForFree": true,
+        "license": "https://github.com/instafire/MyaStudio/blob/main/LICENSE",
+        "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+        },
+        "author": {
+            "@type": "Organization",
+            "name": "Mya Studio",
+            "url": "https://myastudio.genznewz.com"
+        }
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+            {
+                "@type": "Question",
+                "name": "What exactly is Mya Studio?",
+                "acceptedAnswer": { "@type": "Answer", "text": "Mya Studio is a desktop application that lets you create interactive, choose-your-own-adventure style videos. You upload footage, cut clips, connect them with choices in a visual graph editor, and publish standalone HTML players that anyone can watch." }
+            },
+            {
+                "@type": "Question",
+                "name": "Do I need coding experience?",
+                "acceptedAnswer": { "@type": "Answer", "text": "No. The entire workflow is visual — drag-and-drop graph editor, timeline-based logic, and a simple publish button. No code required. Advanced users can extend it since it's open source." }
+            },
+            {
+                "@type": "Question",
+                "name": "What kind of videos can I make?",
+                "acceptedAnswer": { "@type": "Answer", "text": "Any linear video can become interactive: educational content, fiction, marketing, quizzes, training simulations, mystery games, and more. If you have video clips, you can branch them." }
+            },
+            {
+                "@type": "Question",
+                "name": "Can I publish to my own website?",
+                "acceptedAnswer": { "@type": "Answer", "text": "Yes. The export generates a self-contained HTML folder. Upload it to any static host (GitHub Pages, Netlify, your own server). The player works offline and on mobile." }
+            },
+            {
+                "@type": "Question",
+                "name": "Is it really free?",
+                "acceptedAnswer": { "@type": "Answer", "text": "Yes. Mya Studio is free and open source. No paid tiers, no subscriptions, no cloud dependency. Everything runs locally on your machine." }
+            },
+            {
+                "@type": "Question",
+                "name": "What video formats can I import?",
+                "acceptedAnswer": { "@type": "Answer", "text": "Mya Studio accepts MP4, MOV, WebM, MKV, M4V, and AVI video, plus MP3, WAV, OGG, FLAC, M4A, and AAC audio. Each file can be up to 800 MB. You can also add subtitles in VTT or SRT format." }
+            },
+            {
+                "@type": "Question",
+                "name": "Is there a limit on video length or number of scenes?",
+                "acceptedAnswer": { "@type": "Answer", "text": "No fixed limit. There is no cap on scenes, choices, or total running time — the practical limits are your disk space and memory. Individual uploads are capped at 800 MB per file, so very long footage should be split into scenes, which is how branching stories are structured anyway." }
+            },
+            {
+                "@type": "Question",
+                "name": "Can viewers watch on mobile?",
+                "acceptedAnswer": { "@type": "Answer", "text": "Yes. Exported players are plain HTML and work in any modern mobile browser, and the built-in feed is a swipeable vertical layout designed for phones. No app install is needed." }
+            }
+        ]
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "name": "Mya Studio",
+        "url": "https://myastudio.genznewz.com",
+        "description": "Interactive video creation platform",
+        "sameAs": ["https://github.com/instafire/MyaStudio"]
+    }
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -50,7 +141,7 @@
         ::selection { background: var(--accent); color: #000; }
         img { max-width: 100%; display: block; }
         a { color: inherit; text-decoration: none; }
-        button { font: inherit; cursor: pointer; }
+        button { font: inherit; cursor: pointer; touch-action: manipulation; }
 
         /* ---- AMBIENT BACKGROUND ---- */
         body::before {
@@ -347,7 +438,7 @@
             font-size: 2rem;
         }
         .carousel-body { padding: 1rem; }
-        .carousel-body h4 { font-size: 0.9rem; font-weight: 700; margin-bottom: 0.3rem; }
+        .carousel-body .carousel-title { font-size: 0.9rem; font-weight: 700; margin-bottom: 0.3rem; }
         .carousel-body p { font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-dim); }
         .carousel-arrows { display: flex; justify-content: center; gap: 0.75rem; margin-top: 1.25rem; }
         .carousel-arrows button {
@@ -439,6 +530,42 @@
         }
         .modal-close:hover { border-color: var(--accent); }
 
+        /* ---- HOW-TO / USE CASES / COMPARE / TECH (SEO sections) ---- */
+        #how-to, #use-cases, #compare, #tech-requirements { position: relative; z-index: 1; padding: 6rem 0; }
+        #how-to .container > .section-label,
+        #how-to .container > .section-title,
+        #use-cases .container > .section-label,
+        #use-cases .container > .section-title,
+        #compare .container > .section-label,
+        #compare .container > .section-title,
+        #tech-requirements .container > .section-label,
+        #tech-requirements .container > .section-title { text-align: center; margin-left: auto; margin-right: auto; }
+        .prose { max-width: 760px; margin: 0 auto; color: var(--text-muted); font-size: 1rem; line-height: 1.75; }
+        .prose p { margin-bottom: 1rem; }
+        .prose h3 { font-family: var(--font-display); color: var(--text); font-size: 1.25rem; font-weight: 700; letter-spacing: -0.03em; margin: 2rem 0 0.75rem; }
+        .prose strong { color: var(--text); }
+        .use-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.25rem; margin-top: 3rem; }
+        .use-card {
+            background: var(--bg-surface); border: 1px solid var(--line); border-radius: var(--radius);
+            padding: 1.75rem; transition: transform 0.25s, border-color 0.25s, box-shadow 0.25s;
+        }
+        .use-card:hover { transform: translateY(-3px); border-color: rgba(0,153,255,0.18); box-shadow: var(--shadow-lg); }
+        .use-card .icon { font-size: 1.6rem; margin-bottom: 0.75rem; display: block; }
+        .use-card h3 { font-size: 1.05rem; font-weight: 700; margin-bottom: 0.5rem; }
+        .use-card p { font-size: 0.85rem; color: var(--text-muted); line-height: 1.7; }
+        .compare-wrap { overflow-x: auto; margin-top: 3rem; }
+        .compare-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; min-width: 640px; }
+        .compare-table th, .compare-table td { padding: 0.8rem 0.9rem; text-align: left; border-bottom: 1px solid var(--line); line-height: 1.5; }
+        .compare-table thead th { font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-dim); }
+        .compare-table tbody th { font-weight: 700; color: var(--text); white-space: nowrap; }
+        .compare-table tbody td { color: var(--text-muted); }
+        .compare-table tbody tr:first-child td, .compare-table tbody tr:first-child th { color: var(--text); }
+        .compare-table tbody tr:first-child { background: rgba(0,153,255,0.06); }
+        .compare-note { max-width: 760px; margin: 1.5rem auto 0; font-size: 0.8rem; color: var(--text-dim); line-height: 1.65; text-align: center; }
+        .hero-try { margin-top: 1.25rem; font-size: 0.85rem; color: var(--text-dim); }
+        .hero-try a { color: var(--accent-strong); text-decoration: underline; text-underline-offset: 3px; }
+        .hero-try a:hover { color: var(--text); }
+
         /* ---- RESPONSIVE ---- */
         @media (max-width: 1024px) {
             #hero .container { grid-template-columns: 1fr; gap: 2rem; }
@@ -455,6 +582,7 @@
             .hamburger { display: flex; }
             .steps { grid-template-columns: 1fr; }
             .features-grid { grid-template-columns: 1fr; }
+            .use-grid { grid-template-columns: 1fr; }
             .test-grid { grid-template-columns: 1fr; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 2rem; }
             .footer-grid { grid-template-columns: 1fr 1fr; }
@@ -509,12 +637,13 @@
 <section id="hero">
     <div class="container">
         <div class="reveal visible">
-            <h1 class="hero-title">Make your story<br><em>interactive.</em></h1>
-            <p class="hero-sub">A visual studio for creating branching, choose-your-own-adventure stories. Upload video, build a story graph, add choices with variables, and publish standalone interactive players.</p>
+            <h1 class="hero-title">The <em>interactive video maker</em> for branching stories</h1>
+            <p class="hero-sub">Mya Studio is a free, open source interactive video maker. Upload video, build a branching video story graph, add choices with variables, and publish standalone interactive players — no coding required.</p>
             <div class="hero-actions">
-                <a href="#cta" class="btn-primary">Start Creating →</a>
+                <a href="#cta" class="btn-primary" data-track="cta-hero-start">Start Creating →</a>
                 <button class="btn-secondary" onclick="openModal()">Watch Demo ▸</button>
             </div>
+            <p class="hero-try"><a href="/">Open the interactive video maker app</a> — no sign-up, runs in your browser.</p>
             <div class="hero-meta">
                 <span>🎬 Free &amp; open source</span>
                 <span>🔀 Graph-based editor</span>
@@ -523,7 +652,7 @@
         </div>
         <div class="reveal visible" style="transition-delay:0.15s">
             <div class="hero-graph">
-                <svg viewBox="0 0 400 300" xmlns="http://www.w3.org/2000/svg">
+                <svg viewBox="0 0 400 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Diagram of a branching video story graph: one start scene splitting into two scenes, then into four possible endings">
                     <defs>
                         <radialGradient id="nodeGlow"><stop offset="0%" stop-color="rgba(0,153,255,0.4)"/><stop offset="100%" stop-color="rgba(0,153,255,0)"/></radialGradient>
                         <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="rgba(0,153,255,0.6)"/></marker>
@@ -601,6 +730,19 @@
     </div>
 </section>
 
+<!-- ====== HOW TO ====== -->
+<section id="how-to" class="reveal">
+    <div class="container">
+        <p class="section-label">How to</p>
+        <h2 class="section-title">How to make an interactive video with Mya Studio</h2>
+        <div class="prose">
+            <p>Learning how to make interactive videos means thinking in branches instead of a straight line. You start with footage you already have — a short film, a lesson, a product demo — and decide where the viewer should get a say. Each decision point becomes a choice, each choice leads to a new scene, and the scenes connect into a graph you can see all at once. Mya Studio keeps that process visual: no scripting language, no timeline code. The example below walks through a complete project.</p>
+            <h3>A worked example: a three-scene mystery</h3>
+            <p>Imagine a three-minute mystery short. Scene one ends with the detective finding a locked drawer. In Mya Studio you place a choice block at that timestamp with two options: “Pick the lock” and “Search the desk instead.” Each option points at a different scene, so the story splits. The lock-picking scene hides a clue and sets a variable called <strong>found_key</strong>; the desk scene ends with a phone ringing. Later, a choice to open the safe is locked behind <strong>found_key</strong>, so only viewers who picked the lock can take that path. You test the graph in live preview, fix any dead ends the detector flags, then publish — a single self-contained HTML folder you can host anywhere, playable in any modern browser with no account and no install.</p>
+        </div>
+    </div>
+</section>
+
 <!-- ====== FEATURES ====== -->
 <section id="features" class="reveal">
     <div class="container">
@@ -648,13 +790,39 @@
     </div>
 </section>
 
+<!-- ====== USE CASES ====== -->
+<section id="use-cases" class="reveal">
+    <div class="container">
+        <p class="section-label">Use cases</p>
+        <h2 class="section-title">Who is Mya Studio for?</h2>
+        <p class="section-sub">These are the three kinds of creators Mya Studio was built for.</p>
+        <div class="use-grid">
+            <div class="use-card">
+                <span class="icon">🎓</span>
+                <h3>Educators &amp; trainers</h3>
+                <p>Teachers and instructional designers use Mya Studio to turn passive lessons into branching scenarios. A biology module can ask students to choose a treatment for a virtual patient and show the consequences; a history lesson can branch at a real decision point. Choices can be scored with variables, so a quiz becomes a story: right answers unlock the next chapter, wrong answers route to a hint scene. The plain HTML export drops into any LMS or school site without plugins, and works offline on classroom devices.</p>
+            </div>
+            <div class="use-card">
+                <span class="icon">🎬</span>
+                <h3>Filmmakers &amp; storytellers</h3>
+                <p>Independent filmmakers use Mya Studio to shoot choose-your-own-adventure short films without a post-production pipeline. Shoot each scene as a separate clip, import them, and connect the story in the visual graph editor — no coding, no game engine. Choice variables add consequence: a key found in scene two opens a door in scene five, while viewers who missed it get a different ending. Your audience watches in a browser, not an app store, and the built-in feed gives your film a place to be discovered.</p>
+            </div>
+            <div class="use-card">
+                <span class="icon">📈</span>
+                <h3>Marketers &amp; creators</h3>
+                <p>Marketers use interactive video to turn viewers into participants. A product demo can branch on the viewer’s goal, so every viewer sees the pitch that fits them. A lead-generation video can route engaged viewers to a signup scene while casual viewers get a shorter cut. Choice analytics show which branches viewers take, so the next version is built on evidence. The self-contained player embeds on any landing page.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
 <!-- ====== DEEP DIVE ====== -->
 <section id="deep-dive" class="reveal">
     <div class="container dive-layout">
         <div>
             <p class="section-label">Deep dive</p>
             <h2 class="section-title">The Builder — your story on a canvas</h2>
-            <p class="section-sub" style="max-width:480px">Every scene is a node. Every choice is a connection. Drag to arrange, double-click to edit, connect to branch. The graph is your story.</p>
+            <p class="section-sub" style="max-width:480px">Every scene is a node. Every choice is a connection. Drag to arrange, double-click to edit, connect to branch.</p>
             <ul style="list-style:none; margin-top:1.5rem">
                 <li style="display:flex; gap:0.6rem; align-items:flex-start; margin-bottom:0.75rem; font-size:0.85rem; color:var(--text-muted)">
                     <span style="color:var(--good)">✓</span> Auto-layout organizes your graph into readable levels
@@ -666,10 +834,10 @@
                     <span style="color:var(--good)">✓</span> Live preview lets you test any scene before publishing
                 </li>
             </ul>
-            <a href="#cta" class="btn-primary" style="margin-top:1.5rem">Try the Builder →</a>
+            <a href="/" class="btn-primary" style="margin-top:1.5rem">Open the interactive video maker app →</a>
         </div>
         <div class="dive-preview">
-            <svg viewBox="0 0 340 220" xmlns="http://www.w3.org/2000/svg">
+            <svg viewBox="0 0 340 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Diagram of the Mya Studio builder canvas: an intro scene branching into two chapters that both lead to one ending">
                 <rect x="10" y="80" width="90" height="45" rx="10" fill="rgba(9,9,11,0.9)" stroke="rgba(0,153,255,0.2)" stroke-width="1.5"/>
                 <text x="55" y="106" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-size="9" font-family="Azeret Mono, monospace">Intro</text>
                 <rect x="130" y="20" width="90" height="45" rx="10" fill="rgba(9,9,11,0.9)" stroke="rgba(0,153,255,0.15)" stroke-width="1"/>
@@ -689,24 +857,60 @@
     </div>
 </section>
 
+<!-- ====== COMPARE ====== -->
+<section id="compare" class="reveal">
+    <div class="container">
+        <p class="section-label">Compare</p>
+        <h2 class="section-title">Mya Studio vs other interactive video tools</h2>
+        <p class="section-sub">If you are comparing interactive video makers, the differences that matter are cost, who hosts the player, and whether video is a first-class citizen or an afterthought. Some tools are built for text stories with video bolted on; others are hosted platforms that charge per project. Mya Studio is free and open source, runs on your own machine, and exports a player you own outright.</p>
+        <div class="compare-wrap">
+            <table class="compare-table">
+                <thead>
+                    <tr><th scope="col">Tool</th><th scope="col">Cost</th><th scope="col">Self-hosted</th><th scope="col">Native video support</th><th scope="col">Visual graph editor</th><th scope="col">Standalone HTML export</th><th scope="col">Choice analytics</th></tr>
+                </thead>
+                <tbody>
+                    <tr><th scope="row">Mya Studio</th><td>Free &amp; open source</td><td>Yes</td><td>Yes — built for video</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+                    <tr><th scope="row">Twine</th><td>Free &amp; open source</td><td>Yes</td><td>Text-first; video via embeds</td><td>Passage map, not video graph</td><td>Via HTML publish</td><td>No</td></tr>
+                    <tr><th scope="row">H5P</th><td>Free &amp; open source</td><td>Yes, needs an LMS or CMS</td><td>Yes, Interactive Video type</td><td>No</td><td>No, needs an H5P host</td><td>Via LMS / xAPI</td></tr>
+                    <tr><th scope="row">BranchTrack</th><td>Paid SaaS</td><td>No</td><td>Yes — scenario video</td><td>Yes, scenario builder</td><td>No, hosted player</td><td>Yes</td></tr>
+                    <tr><th scope="row">Eko</th><td>Paid platform</td><td>No</td><td>Yes</td><td>Yes</td><td>No, hosted player</td><td>Yes</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <p class="compare-note">Features reflect each tool’s public documentation as of November 2026. Twine is text-first, H5P is a plugin for learning platforms, and BranchTrack and Eko are hosted services — Mya Studio is the only option here that is free, open source, self-hosted, and built around video.</p>
+    </div>
+</section>
+
+<!-- ====== TECH REQUIREMENTS ====== -->
+<section id="tech-requirements" class="reveal">
+    <div class="container">
+        <p class="section-label">Requirements</p>
+        <h2 class="section-title">Technical requirements and compatibility</h2>
+        <div class="prose">
+            <p>Mya Studio runs on <strong>Windows, macOS, and Linux</strong>. It is a Node.js application; the server and ffmpeg ship with the project, so there is nothing else to install beyond Node itself. Video imports accept <strong>MP4, MOV, WebM, MKV, M4V, and AVI</strong>, plus <strong>MP3, WAV, OGG, FLAC, M4A, and AAC</strong> audio, with subtitles in VTT or SRT. Each uploaded file can be up to <strong>800 MB</strong>, and there is no fixed cap on scenes, choices, or total video length — the practical limit is your machine’s disk and memory.</p>
+            <p>Exports are <strong>self-contained HTML players</strong> that run in any modern browser on desktop or mobile, with no server, account, or internet connection. Video content can be in any language; the player interface is in English. There is no built-in real-time collaboration — projects live as local files — but finished work can be shared via the feed or any host.</p>
+        </div>
+    </div>
+</section>
+
 <!-- ====== SHOWCASE ====== -->
 <section id="showcase" class="reveal">
     <div class="container">
         <p class="section-label">Showcase</p>
         <h2 class="section-title">Published with Mya Studio</h2>
-        <p class="section-sub">Every published movie gets a standalone player and appears in the interactive feed.</p>
+        <p class="section-sub">Every published movie gets a standalone player and appears in the interactive feed. <a href="/feed/" style="color:var(--accent-strong); text-decoration:underline; text-underline-offset:3px">Browse published interactive movies in the feed</a> to see what creators are making.</p>
         <div class="carousel-wrap">
             <div class="carousel" id="carousel">
-                <div class="carousel-card"><div class="carousel-thumb">🏔️</div><div class="carousel-body"><h4>Mountain Escape</h4><p>12 scenes · 8 choices</p></div></div>
-                <div class="carousel-card"><div class="carousel-thumb">🔍</div><div class="carousel-body"><h4>The Lost Key</h4><p>8 scenes · 14 choices</p></div></div>
-                <div class="carousel-card"><div class="carousel-thumb">🚀</div><div class="carousel-body"><h4>Space Bound</h4><p>15 scenes · 22 choices</p></div></div>
-                <div class="carousel-card"><div class="carousel-thumb">🏚️</div><div class="carousel-body"><h4>Haunted House</h4><p>10 scenes · 16 choices</p></div></div>
-                <div class="carousel-card"><div class="carousel-thumb">🧪</div><div class="carousel-body"><h4>Quantum Choice</h4><p>20 scenes · 30 choices</p></div></div>
-                <div class="carousel-card"><div class="carousel-thumb">⚔️</div><div class="carousel-body"><h4>Dragon's Path</h4><p>18 scenes · 25 choices</p></div></div>
+                <div class="carousel-card"><div class="carousel-thumb">🏔️</div><div class="carousel-body"><p class="carousel-title"><strong>Mountain Escape</strong></p><p>12 scenes · 8 choices</p></div></div>
+                <div class="carousel-card"><div class="carousel-thumb">🔍</div><div class="carousel-body"><p class="carousel-title"><strong>The Lost Key</strong></p><p>8 scenes · 14 choices</p></div></div>
+                <div class="carousel-card"><div class="carousel-thumb">🚀</div><div class="carousel-body"><p class="carousel-title"><strong>Space Bound</strong></p><p>15 scenes · 22 choices</p></div></div>
+                <div class="carousel-card"><div class="carousel-thumb">🏚️</div><div class="carousel-body"><p class="carousel-title"><strong>Haunted House</strong></p><p>10 scenes · 16 choices</p></div></div>
+                <div class="carousel-card"><div class="carousel-thumb">🧪</div><div class="carousel-body"><p class="carousel-title"><strong>Quantum Choice</strong></p><p>20 scenes · 30 choices</p></div></div>
+                <div class="carousel-card"><div class="carousel-thumb">⚔️</div><div class="carousel-body"><p class="carousel-title"><strong>Dragon's Path</strong></p><p>18 scenes · 25 choices</p></div></div>
             </div>
             <div class="carousel-arrows">
-                <button onclick="scrollCarousel(-1)" aria-label="Previous">←</button>
-                <button onclick="scrollCarousel(1)" aria-label="Next">→</button>
+                <button onclick="scrollCarousel(-1)" aria-label="Previous" data-track="carousel-prev">←</button>
+                <button onclick="scrollCarousel(1)" aria-label="Next" data-track="carousel-next">→</button>
             </div>
         </div>
     </div>
@@ -747,8 +951,9 @@
     <div class="container">
         <h2 class="section-title">Ready to create your<br>interactive story?</h2>
         <p>No sign-up required. Free and open source. Start building right now.</p>
-        <a href="https://github.com" target="_blank" rel="noopener" class="btn-primary">Download &amp; Start Creating →</a>
+        <a href="https://github.com/instafire/MyaStudio" target="_blank" rel="noopener noreferrer" class="btn-primary" data-track="cta-download">Download &amp; Start Creating →</a>
         <div style="margin-top:1rem; font-family:var(--font-mono); font-size:0.65rem; color:var(--text-dim)">Free · Open source · No account needed</div>
+        <p class="hero-try" style="margin-top:1rem"><a href="/">Open the studio app directly</a> — it runs in your browser, no download needed to try it.</p>
     </div>
 </section>
 
@@ -759,24 +964,36 @@
         <h2 class="section-title">Common questions</h2>
         <div class="faq-list">
             <div class="faq-q">
-                <button onclick="toggleFaq(this)" type="button">What exactly is Mya Studio?</button>
+                <button onclick="toggleFaq(this)" type="button" data-track="faq-open">What exactly is Mya Studio?</button>
                 <div class="faq-answer">Mya Studio is a desktop application that lets you create interactive, choose-your-own-adventure style videos. You upload footage, cut clips, connect them with choices in a visual graph editor, and publish standalone HTML players that anyone can watch.</div>
             </div>
             <div class="faq-q">
-                <button onclick="toggleFaq(this)" type="button">Do I need coding experience?</button>
+                <button onclick="toggleFaq(this)" type="button" data-track="faq-open">Do I need coding experience?</button>
                 <div class="faq-answer">No. The entire workflow is visual — drag-and-drop graph editor, timeline-based logic, and a simple publish button. No code required. Advanced users can extend it since it's open source.</div>
             </div>
             <div class="faq-q">
-                <button onclick="toggleFaq(this)" type="button">What kind of videos can I make?</button>
+                <button onclick="toggleFaq(this)" type="button" data-track="faq-open">What kind of videos can I make?</button>
                 <div class="faq-answer">Any linear video can become interactive: educational content, fiction, marketing, quizzes, training simulations, mystery games, and more. If you have video clips, you can branch them.</div>
             </div>
             <div class="faq-q">
-                <button onclick="toggleFaq(this)" type="button">Can I publish to my own website?</button>
+                <button onclick="toggleFaq(this)" type="button" data-track="faq-open">Can I publish to my own website?</button>
                 <div class="faq-answer">Yes. The export generates a self-contained HTML folder. Upload it to any static host (GitHub Pages, Netlify, your own server). The player works offline and on mobile.</div>
             </div>
             <div class="faq-q">
-                <button onclick="toggleFaq(this)" type="button">Is it really free?</button>
+                <button onclick="toggleFaq(this)" type="button" data-track="faq-open">Is it really free?</button>
                 <div class="faq-answer">Yes. Mya Studio is free and open source. No paid tiers, no subscriptions, no cloud dependency. Everything runs locally on your machine.</div>
+            </div>
+            <div class="faq-q">
+                <button onclick="toggleFaq(this)" type="button" data-track="faq-open">What video formats can I import?</button>
+                <div class="faq-answer">Mya Studio accepts MP4, MOV, WebM, MKV, M4V, and AVI video, plus MP3, WAV, OGG, FLAC, M4A, and AAC audio. Each file can be up to 800 MB. You can also add subtitles in VTT or SRT format.</div>
+            </div>
+            <div class="faq-q">
+                <button onclick="toggleFaq(this)" type="button" data-track="faq-open">Is there a limit on video length or number of scenes?</button>
+                <div class="faq-answer">No fixed limit. There is no cap on scenes, choices, or total running time — the practical limits are your disk space and memory. Individual uploads are capped at 800 MB per file, so very long footage should be split into scenes, which is how branching stories are structured anyway.</div>
+            </div>
+            <div class="faq-q">
+                <button onclick="toggleFaq(this)" type="button" data-track="faq-open">Can viewers watch on mobile?</button>
+                <div class="faq-answer">Yes. Exported players are plain HTML and work in any modern mobile browser, and the built-in feed is a swipeable vertical layout designed for phones. No app install is needed.</div>
             </div>
         </div>
     </div>
@@ -789,9 +1006,9 @@
             <div class="nav-logo"><span class="nav-logo-icon">🎬</span> Mya Studio</div>
             <p>Make your story interactive. A visual studio for branching, choose-your-own-adventure videos.</p>
         </div>
-        <div><h5>Product</h5><ul><li><a href="#features">Features</a></li><li><a href="#how-it-works">How it Works</a></li><li><a href="#showcase">Showcase</a></li><li><a href="#cta">Download</a></li></ul></div>
-        <div><h5>Resources</h5><ul><li><a href="#faq">FAQ</a></li><li><a href="https://github.com" target="_blank" rel="noopener">GitHub</a></li><li><a href="#">Documentation</a></li><li><a href="#">API Reference</a></li></ul></div>
-        <div><h5>Legal</h5><ul><li><a href="#">License (ISC)</a></li><li><a href="#">Privacy</a></li><li><a href="#">Terms</a></li><li><a href="https://github.com" target="_blank" rel="noopener">Source Code</a></li></ul></div>
+        <div><h5>Product</h5><ul><li><a href="#features">Features</a></li><li><a href="#how-it-works">How it Works</a></li><li><a href="#showcase">Showcase</a></li><li><a href="/">Open the Studio App</a></li><li><a href="/feed/">Browse the Feed</a></li><li><a href="#cta">Download</a></li></ul></div>
+        <div><h5>Resources</h5><ul><li><a href="#faq">FAQ</a></li><li><a href="https://github.com/instafire/MyaStudio" target="_blank" rel="noopener noreferrer">GitHub</a></li><li><a href="https://github.com/instafire/MyaStudio#readme" target="_blank" rel="noopener noreferrer">Documentation</a></li><li><a href="/sitemap.xml">Sitemap</a></li></ul></div>
+        <div><h5>Legal</h5><ul><li><a href="#">License (ISC)</a></li><li><a href="#">Privacy</a></li><li><a href="#">Terms</a></li><li><a href="https://github.com/instafire/MyaStudio" target="_blank" rel="noopener noreferrer">Source Code</a></li></ul></div>
     </div>
     <div class="footer-tech">
         <span>Built with Node.js · Express · SQLite · ffmpeg · Vue 3</span>

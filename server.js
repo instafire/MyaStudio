@@ -80,6 +80,12 @@ app.use((req, res, next) => {
 });
 app.use(express.static(path.join(__dirname, 'public')));
 
+// SEO: keyword slug for the landing page. /landing.html keeps working
+// (served by the static middleware above); this is the canonical URL.
+app.get('/interactive-video-maker', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'landing.html'));
+});
+
 feedApp.use(security.securityHeaders);
 feedApp.use(cors({ origin: security.corsOriginChecker(TRUSTED_ORIGINS) }));
 feedApp.use(express.json());

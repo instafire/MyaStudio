@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /videos/
+Disallow: /audio/
+Disallow: /clips/
+Disallow: /exports/
+Disallow: /uploads/
+Sitemap: https://myastudio.genznewz.com/sitemap.xml
