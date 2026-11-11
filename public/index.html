@@ -5051,10 +5051,15 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 try {
                     await navigator.clipboard.writeText(text);
                 } catch (err) {
-                    const ta = document.createElement('textarea');
-                    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-                    document.body.appendChild(ta); ta.select();
-                    document.execCommand('copy'); document.body.removeChild(ta);
+                    try {
+                        const ta = document.createElement('textarea');
+                        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+                        document.body.appendChild(ta); ta.select();
+                        document.execCommand('copy'); document.body.removeChild(ta);
+                    } catch (_) {
+                        this.showToast("Copy failed — select the text manually", 'error');
+                        return;
+                    }
                 }
                 this.showToast("ID Copied!");
             },
@@ -5836,7 +5841,7 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                         return;
                     }
                     if (unlocked.length === 0) {
-                        v.play();
+                        v.play().catch(() => {});
                         return;
                     }
                     const displayBlock = Object.assign({}, block);
