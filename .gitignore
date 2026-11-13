@@ -33,6 +33,8 @@ public/gifs/*
 !public/gifs/.gitkeep
 public/audio/*
 !public/audio/.gitkeep
+public/subtitles/*
+!public/subtitles/.gitkeep
 public/exports/*
 !public/exports/.gitkeep
 
