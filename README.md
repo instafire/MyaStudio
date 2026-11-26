@@ -1,122 +1,133 @@
 # MyaStudio
 
-> A full-featured, local-first studio for creating branching choose-your-own-adventure interactive movies and video narratives.
+> A local-first studio for making interactive, choose-your-own-adventure movies from your own footage, like the interactive specials on Netflix.
 
-MyaStudio lets creators upload source videos, cut reusable clips, place timed interactive choices on scenes, manage branching outcomes, and export self-contained, zero-dependency HTML5 players or browse published stories in an interactive vertical feed.
-
----
-
-## ✨ Features
-
-- **Project Hub**: Multi-project management with themes, synopses, genres, and metadata.
-- **Precision Video Editor**: Frame-by-frame trimming (`I` / `O` shortcuts), live playhead scrub, jump to marks, and A⇄B selection loops.
-- **Visual Story Builder & Logic Graph**: Connect scenes with timed decision overlays, return branches, conditional variables (`set_var`, `req_var`), and alternate endings.
-- **AI Story Outliner & Movie Agent**: Generate branching movie outlines and automatically scaffold project scene trees from source footage.
-- **GIF Export**: Fast GIF extraction directly from trimmed clips or timeline selections.
-- **Standalone HTML5 Movie Publisher**: Export completely portable, single-folder HTML5 player packages with embedded choice logic, keyboard navigation, and seekable timelines.
-- **Interactive Feed**: Secondary standalone feed on port `3001` listing all published interactive movies.
-- **Local & Private**: All data is stored locally in SQLite and on the local filesystem. No mandatory cloud accounts or subscriptions.
+Upload your videos, cut them into scenes, connect the scenes with choices, preview every path, and publish a self-contained player you can share as a link, embed on a site, or download as a zip.
 
 ---
 
-## 🚀 Getting Started
+## ✨ What you can do
 
-### Prerequisites
+- **One editing screen.** Media and scenes on the left, a visual story map in the middle, settings for whatever you select on the right. No tab-hopping.
+- **Cut scenes fast.** A full-screen cutter with a filmstrip, draggable start/end handles, frame stepping, loop playback and keyboard shortcuts (`I` / `O`). After each cut the next one starts where the last ended, so you can slice a whole video in a row.
+- **Automatic shot detection.** "Find shot changes" marks every cut in your footage (handles snap to them) and can turn each shot into a scene in one click. Or use a whole video as one scene instantly, with no re-encode.
+- **Drag to connect.** Drag from a choice's dot to another scene. Every scene ends one of three ways: **Choices**, **Continue** to another scene, or an **Ending** with a name.
+- **Netflix-style choices.** Optional question, a countdown bar, a default pick when time runs out, shuffle, and pause-while-choosing. Moments during a scene can offer quick detours that come back ("Come back here afterwards") or a "Keep watching" option.
+- **Remember & unlock.** Choices can set a flag (`has_key`) and later choices can appear only if it's set, or not set (`!has_key`).
+- **Live story check.** Dead ends, choices that go nowhere, unreachable scenes, endless loops and flags that are never set are flagged as you work, with a "Show me" link to each one.
+- **Preview = what viewers get.** Preview runs the exact player that gets published, from the start or from any scene.
+- **A player viewers enjoy.** Choices appear over the playing video, scenes switch without black gaps (the next possible scenes are preloaded), viewers can go back to their last choice, resume where they left off, and the end screen shows which ending they found and how many are left.
+- **Publish anywhere.** One click builds a folder with `index.html`, `story.json`, the player and only the footage viewers can reach. Copy the link, copy an embed `<iframe>`, or download a `.zip` for any static host or a USB stick. Viewer choice stats show up in the publish panel.
+- **Local & private.** Everything lives in SQLite and on your disk. No accounts, no cloud.
 
-- [Node.js](https://nodejs.org/) (v18 or newer recommended)
-- Standard web browser (Chrome, Edge, Firefox, Safari)
+The previous editor is still available at `/classic.html` (GIF export, batch tools, the AI story agent) and works on the same projects.
 
-> **Note**: Bundled static FFmpeg and FFprobe binaries are included automatically via `ffmpeg-static` and `ffprobe-static` dependencies.
+---
 
-### Installation
+## 🚀 Getting started
+
+**Requirements:** Node.js 18.17 or newer (CI uses Node 20) and a modern browser. FFmpeg and FFprobe are bundled through `ffmpeg-static` / `ffprobe-static`.
 
 ```bash
-# Clone the repository
 git clone https://github.com/instafire/MyaStudio.git
 cd MyaStudio
-
-# Install dependencies
 npm install
+npm start            # or: node server.js
 ```
 
-### Running MyaStudio
+On Windows you can also run `.\start-mya-studio.ps1 -Detach`.
 
-**Direct startup:**
-```bash
-node server.js
-```
-or
-```bash
-npm start
-```
+- **Studio:** http://127.0.0.1:3000
+- **Feed of published movies:** http://127.0.0.1:3001
 
-**On Windows (automatic runtime detection & background detach):**
-```powershell
-.\start-mya-studio.ps1 -Detach
-```
+New here? Click **Try the sample story** on the home screen for a ready-made two-door movie with a timer and two named endings.
 
-### Access URLs
+## 🎬 Making a movie
 
-- **Studio Interface**: [http://127.0.0.1:3000](http://127.0.0.1:3000)
-- **Interactive Feed**: [http://127.0.0.1:3001](http://127.0.0.1:3001)
+1. **New movie**, then drop your videos onto the window (or the Media tab).
+2. The cutter opens on your first upload. Set a start and end, name the scene, **Add scene**. Repeat, or use **Find shot changes**.
+3. On the story map, pick what happens when each scene ends: **Choices**, **Continue** or **Ending**. Drag from a choice's dot to the scene it leads to.
+4. Fine-tune in the right panel: choice text, when choices appear, countdown and default, music, captions.
+5. **Preview** to watch every path. Fix anything the story check flags.
+6. **Publish**, then share the link, embed it, or download the zip.
 
-### Security & deployment
+---
 
-MyaStudio is a local-only server. It has no authentication, so it must never be exposed directly to a network you do not trust:
+## ⌨️ Keyboard shortcuts
 
-- **Loopback only.** `HOST` / `FEED_HOST` default to `127.0.0.1` and the server refuses to start with any other bind address (`0.0.0.0`, a LAN IP, …). `PORT` / `FEED_PORT` must be decimal ports 1–65535.
-- **Reverse proxy, not a public bind.** To reach the studio from outside the machine, put a reverse proxy (e.g. nginx, an SSH `-R` tunnel) in front of the loopback ports and set `TRUSTED_ORIGINS` to the public origin(s), e.g. `TRUSTED_ORIGINS=https://myastudio.example.com`. Browser requests from any other origin are rejected, and state-changing API requests must use JSON or multipart media bodies.
-- **Uploads.** Media uploads accept video/audio files only (`.mp4`, `.mov`, `.webm`, `.mkv`, `.avi`, `.mp3`, `.wav`, `.ogg`, `.m4a`, `.flac`, `.aac`); subtitles accept `.vtt` / `.srt` only. Stored media paths are confined to `public/`; project imports whitelist their SQL columns and remap references to the imported project.
+| Where | Keys | Action |
+|---|---|---|
+| Story map | `Delete` | Delete the selected scene |
+| | `F` | Fit everything on screen |
+| | `Esc` | Deselect |
+| | `Ctrl` + `Enter` | Preview (from the selected scene) |
+| | `Ctrl` + scroll | Zoom |
+| | `?` | Help |
+| Cutter | `Space` | Play / pause |
+| | `I` / `O` | Set scene start / end at the playhead |
+| | `←` / `→` | Move 1 s (`Shift`: 5 s) |
+| | `,` / `.` | Move one frame |
+| | `L` | Loop the selection |
+| | `Enter` | Add the scene |
+| Player | `Space` / `K` | Play / pause |
+| | `1` – `9` | Pick a choice |
+| | `B` | Back to the previous choice |
+| | `M`, `C`, `F` | Mute, captions, full screen |
+
+---
+
+## 🔒 Security & deployment
+
+MyaStudio is a local-only server with no authentication, so it must never be exposed directly to a network you don't trust:
+
+- **Loopback only.** `HOST` / `FEED_HOST` default to `127.0.0.1` and the server refuses any other bind address. `PORT` / `FEED_PORT` must be decimal ports 1–65535.
+- **Reverse proxy, not a public bind.** To reach the studio from outside the machine, put a reverse proxy (nginx, an SSH `-R` tunnel) in front of the loopback ports and set `TRUSTED_ORIGINS` to the public origin(s), e.g. `TRUSTED_ORIGINS=https://myastudio.example.com`. Browser requests from other origins are rejected, and state-changing API requests must use JSON or multipart media bodies.
+- **Embedding.** Published movies under `/exports/` may be framed by other sites (so the embed code works); the studio itself stays same-origin only.
+- **Uploads.** Media uploads accept video/audio files only (`.mp4`, `.mov`, `.webm`, `.mkv`, `.avi`, `.m4v`, `.mp3`, `.wav`, `.ogg`, `.m4a`, `.flac`, `.aac`), up to 800 MB; files over 90 MB upload in 5 MB chunks so proxies with body limits don't reject them. Subtitles accept `.vtt` / `.srt`. Stored media paths are confined to `public/`; project imports whitelist their SQL columns and remap references.
 - **Errors.** Unexpected server errors return a generic message; detail stays in the server log.
+- **Database location.** `database.sqlite` in the working directory, or set `MYA_DB_PATH`.
 
 ---
 
-## ⌨️ Keyboard Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| `Space` | Play / Pause video |
-| `I` | Mark In-point |
-| `O` | Mark Out-point |
-| `[` / `]` | Step 1 frame back / forward |
-| `A` | Toggle A⇄B selection loop |
-| `M` | Add timeline marker |
-| `Ctrl + K` | Open Command Palette |
-| `1` – `7` | Switch workflow tabs |
-| `?` | Show Shortcuts overlay |
-
----
-
-## 📁 Project Structure
+## 📁 Project structure
 
 ```
+├── server.js                  # Express API, SQLite schema, ffmpeg rendering, publishing
 ├── lib/
-│   ├── movie-agent.js         # AI story planning & tree normalization
-│   └── published-player.js    # Standalone HTML player generator
+│   ├── story.js               # Builds the shared story format from database rows
+│   ├── published-player.js    # HTML page that hosts the player (published + preview)
+│   ├── zip.js                 # Dependency-free zip writer for downloads
+│   ├── security.js            # Host/port/origin checks, headers, upload validation
+│   ├── movie-agent.js         # AI / offline story planner (classic editor)
+│   └── subtitles.js           # SRT → WebVTT
 ├── public/
-│   ├── index.html             # Main MyaStudio web app
-│   ├── feed/                  # Interactive feed UI
-│   ├── vendor/                # Vendor scripts (Vue 3 production bundle)
-│   ├── videos/                # Uploaded source videos (.gitkeep)
-│   ├── clips/                 # Rendered video clips (.gitkeep)
-│   ├── audio/                 # Background audio tracks (.gitkeep)
-│   ├── thumbnails/            # Generated video posters (.gitkeep)
-│   └── exports/               # Exported standalone HTML players (.gitkeep)
-├── tests/
-│   ├── movie-agent.test.js    # Movie agent unit tests
-│   └── published-player.test.js # Published player unit tests
-├── server.js                  # Express application, SQLite database & API routes
-├── package.json               # Project manifest & dependencies
-└── start-mya-studio.ps1       # Windows launcher script
+│   ├── index.html             # Studio shell
+│   ├── studio/                # Studio app (Vue 3, no build step)
+│   │   ├── main.js, store.js, api.js, util.js, icons.js, studio.css
+│   │   └── components/        # hub, editor, library, storymap, inspector, cutter, preview, publish, help
+│   ├── player/                # The viewer: copied into every published movie
+│   │   ├── story-core.js      # Story format, playback engine and story check (also used by the server)
+│   │   ├── mya-player.js      # Player UI
+│   │   └── mya-player.css
+│   ├── classic.html           # Previous editor
+│   ├── feed/                  # Feed of published movies (port 3001)
+│   └── videos/ clips/ audio/ thumbnails/ subtitles/ exports/   # your media (git-ignored)
+└── tests/                     # node:test suites, including an end-to-end API test
 ```
+
+### Story format
+
+Published movies ship a `story.json` (version 2): `scenes` (video, poster, duration, `next`, `ending`), and `choicePoints` (scene, time, prompt, countdown, shuffle, pause, and `choices` with `action` of `scene`, `end`, `dismiss` or the legacy `next`). See the header of `public/player/story-core.js` for the full shape.
 
 ---
 
-## 🧪 Running Tests
+## 🧪 Tests
 
 ```bash
 npm test
 ```
+
+Covers the playback engine and story check, story building, the published page, security helpers, the zip writer, and an end-to-end run against a real server (sample story, scene settings, choices, preview, publish, zip, upload, cut, re-trim and shot detection) on a temporary database.
 
 ---
 

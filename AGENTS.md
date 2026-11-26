@@ -3,7 +3,9 @@
 ## Project Structure & Module Organization
 This repository is a small Node.js app centered on [`server.js`](server.js), which defines the Express API, SQLite schema, upload handling, and ffmpeg clip/export logic. Static UI and generated media live under `public/`:
 
-- `public/index.html`: browser entry point
+- `public/index.html` + `public/studio/`: the studio (Vue 3 ES modules, no build step)
+- `public/player/`: the viewer (`story-core.js` engine + story check, `mya-player.js` UI), shared by preview and every published export; the server also `require`s `story-core.js`
+- `public/classic.html`: the previous editor, kept for GIF export, batch tools and the AI agent
 - `public/videos`, `public/audio`: uploaded source files
 - `public/clips`, `public/thumbnails`, `public/exports`: generated outputs
 
@@ -21,7 +23,7 @@ The app listens on `HOST` and `PORT`; defaults are `127.0.0.1` and `3000`.
 Match the existing code style in `server.js`: 4-space indentation, semicolons, CommonJS `require`, and concise route handlers. Use `camelCase` for variables/functions, `UPPER_SNAKE_CASE` for environment-driven constants, and descriptive API paths such as `/api/create_event_clip`. Keep filesystem paths rooted with `path.join(__dirname, ...)`.
 
 ## Testing Guidelines
-Automated tests live in `tests/` and run with `npm test` (`node --test tests/published-player.test.js tests/movie-agent.test.js`). Keep them green after touching `lib/` or the publish path. For UI changes in `public/index.html`, also verify manually by:
+Automated tests live in `tests/` and run with `npm test` (every suite is listed in `package.json`; `tests/api.test.js` starts a real server on a random port with `MYA_DB_PATH` pointing at a temp database). Keep them green after touching `lib/`, `public/player/` or the publish path. For UI changes in `public/studio/`, also verify manually by:
 
 1. Starting the app locally.
 2. Uploading a sample video/audio file.

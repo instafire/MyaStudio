@@ -9,9 +9,13 @@ const path = require('node:path');
 
 const root = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
-const player = read('lib/published-player.js');
+// The published player was rebuilt (public/player/*); the classic editor
+// keeps the old studio UI, so its guards now read public/classic.html.
+const player = read('public/player/mya-player.js');
+const engineSource = read('public/player/story-core.js');
+const Story = require('../public/player/story-core.js');
 const server = read('server.js');
-const index = read('public/index.html');
+const index = read('public/classic.html');
 
 function sliceBetween(src, startMarker, endMarker) {
     const start = src.indexOf(startMarker);
@@ -20,18 +24,17 @@ function sliceBetween(src, startMarker, endMarker) {
     return src.slice(start, end === -1 ? src.length : end);
 }
 
-// --- Item 1: loadClip clears the pending timeout before scheduling a new one
-test('item 1: loadClip cancels the previous load timeout', () => {
-    const body = sliceBetween(player, 'loadClip(id, forceTime = 0) {', 'onClipEnded()');
-    assert.match(body, /if \(this\._loadTimeout\) clearTimeout\(this\._loadTimeout\);/);
-    assert.match(body, /this\._loadTimeout = setTimeout\(/);
+// --- Item 1: a slow scene load can never overwrite a newer one
+test('item 1: scene loads are tokenised so stale loads are ignored', () => {
+    assert.match(player, /const token = \+\+transitionToken;/);
+    assert.match(player, /if \(token !== transitionToken \|\| destroyed\) return;/);
 });
 
-// --- Item 2: analytics events queue in localStorage and survive a failed flush
-test('item 2: analytics queue is retained when the server rejects an event', () => {
-    assert.match(player, /studio_analytics_/);
-    assert.match(player, /Events stay queued for next attempt/);
-    assert.match(player, /localStorage\.removeItem\(queueKey\)/);
+// --- Item 2: analytics never break playback when the server is absent
+test('item 2: analytics requests are fire-and-forget and only for published movies', () => {
+    assert.match(player, /function trackChoice/);
+    assert.match(player, /keepalive: true/);
+    assert.match(player, /hosted elsewhere: analytics are optional/);
 });
 
 // --- Item 3: clip durations never call .toFixed on a null value
@@ -76,15 +79,17 @@ test('item 7: toast timer cleared in beforeUnmount', () => {
 });
 
 // --- Item 8: all-locked choices let the clip play through
-test('item 8: all-locked choice block does not pause or show choices', () => {
-    const body = sliceBetween(player, 'checkTime() {', 'makePreviewChoice');
-    const m = body.match(/if \(unlocked\.length === 0\) \{([\s\S]*?)\n {24}\}/);
-    assert.ok(m, 'all-locked branch not found');
-    assert.match(m[1], /return;/);
-    assert.doesNotMatch(m[1], /showChoices = true|v\.pause\(\)/);
+test('item 8: an all-locked choice point is skipped instead of trapping the viewer', () => {
+    const engine = Story.createEngine({
+        startSceneId: 'a',
+        scenes: [{ id: 'a', name: 'A', src: 'a.mp4', duration: 6, ending: { title: 'End' } }, { id: 'b', name: 'B', src: 'b.mp4', duration: 2 }],
+        choicePoints: [{ id: 'p', sceneId: 'a', time: 3, choices: [{ id: 'x', label: 'Locked', to: 'b', requireFlag: 'never_set' }] }]
+    });
+    engine.start();
+    assert.equal(engine.pointDue(3.2), null);
+    assert.equal(engine.sceneEnded().type, 'end');
 });
 
-// --- Item 9: 'next' advances forward only; no timeout-target index jump
 test('item 9: next-action index can only move forward in the sequence', () => {
     assert.match(index, /getNextSequenceClipId\(currentClipId\) \{[\s\S]*?if \(index >= 0 && index \+ 1 < sequence\.length\) return sequence\[index \+ 1\]\.id;/);
     const branch = sliceBetween(index, "if(choice.action === 'next') {", "const targetClip = this.clips.find");
@@ -133,7 +138,7 @@ test('item 13: single .choice-card-overlay base rule', () => {
 // Guard prevents a future "cleanup" from deleting it on the stale doc's say-so.
 test('item 14: return_to_main is persisted by the server and read back', () => {
     assert.match(server, /return_to_main = \?/);
-    assert.match(server, /return: !!e\.return_to_main/);
+    assert.match(read('lib/story.js'), /returnHere: !!Number\(edge\.return_to_main\)/);
 });
 
 // --- Item 15: testEventClip refreshes data before filtering edges
@@ -145,13 +150,34 @@ test('item 15: testEventClip awaits refreshData before filtering', () => {
 });
 
 // --- Item 16: return time clamped inside the clip duration
-test('item 16: return time clamped below clip duration', () => {
-    assert.match(player, /Math\.min\(\(this\.currentOptions\.time \|\| 0\) \+ 0\.1, \(this\.currentClip\.duration \|\| 999\) - 0\.1\)/);
+test('item 16: returning from a detour never seeks past the end of the scene', () => {
+    const engine = Story.createEngine({
+        startSceneId: 'a',
+        scenes: [{ id: 'a', name: 'A', src: 'a.mp4', duration: 5 }, { id: 'b', name: 'B', src: 'b.mp4', duration: 2 }],
+        choicePoints: [{ id: 'p', sceneId: 'a', time: 4.95, choices: [{ id: 'x', label: 'Detour', to: 'b', returnHere: true }, { id: 'y', label: 'Stay', action: 'end' }] }]
+    });
+    engine.start();
+    engine.pointDue(5);
+    engine.choose('p', 'x');
+    const back = engine.sceneEnded();
+    assert.equal(back.sceneId, 'a');
+    assert.ok(back.time <= 5 - 0.05, `resume time ${back.time} stays inside the scene`);
+    assert.match(engineSource, /duration - 0\.05/);
 });
 
-// --- Item 17: no blocking confirm()/alert() dialogs
 test('item 17: no confirm() or alert() calls', () => {
-    for (const [name, src] of [['index.html', index], ['published-player.js', player], ['server.js', server]]) {
-        assert.doesNotMatch(src, /\b(confirm|alert)\s*\(/, `${name} still calls confirm()/alert()`);
+    const studioFiles = fs.readdirSync(path.join(root, 'public', 'studio', 'components'))
+        .map(file => [`studio/components/${file}`, read(`public/studio/components/${file}`)]);
+    const files = [
+        ['classic.html', index],
+        ['player/mya-player.js', player],
+        ['player/story-core.js', engineSource],
+        ['studio/store.js', read('public/studio/store.js')],
+        ['server.js', server],
+        ...studioFiles
+    ];
+    for (const [name, src] of files) {
+        // window.confirm / window.alert block the page; the studio uses its own dialogs.
+        assert.doesNotMatch(src, /(?<![\w.])(confirm|alert)\s*\(/, `${name} still calls confirm()/alert()`);
     }
 });
