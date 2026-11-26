@@ -1,11 +1,11 @@
 {
   "name": "myastudio",
-  "version": "1.0.0",
-  "description": "Interactive video studio for creating branching choose-your-own-adventure movies",
+  "version": "2.0.0",
+  "description": "Interactive movie studio: cut scenes from your videos, connect them with choices, preview and publish Netflix-style interactive movies",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test tests/published-player.test.js tests/movie-agent.test.js tests/choice-timer.test.js tests/bugfix-guards.test.js tests/security.test.js tests/seo-landing.test.js tests/preview-timeout.test.js"
+    "test": "node --test tests/story-core.test.js tests/published-player.test.js tests/movie-agent.test.js tests/choice-timer.test.js tests/bugfix-guards.test.js tests/security.test.js tests/seo-landing.test.js tests/preview-timeout.test.js tests/zip.test.js tests/api.test.js"
   },
   "keywords": [
     "interactive-video",
@@ -30,5 +30,8 @@
     "sqlite": "^5.1.1",
     "sqlite3": "^6.0.1",
     "uuid": "^13.0.2"
+  },
+  "engines": {
+    "node": ">=18.17"
   }
 }
