@@ -34,6 +34,7 @@ export const Editor = {
 
         const health = computed(() => {
             const result = analysis.value;
+            if (!result.stats.scenes) return { cls: '', label: 'No scenes yet', icon: 'info' };
             if (result.errors) return { cls: 'has-errors', label: `${result.errors} to fix`, icon: 'error' };
             if (result.warnings) return { cls: 'has-warnings', label: `${result.warnings} to check`, icon: 'warning' };
             return { cls: 'is-good', label: 'Story ready', icon: 'check' };
@@ -131,14 +132,14 @@ export const Editor = {
                 <span class="dot"></span><span class="hide-sm">{{ saveLabel }}</span>
             </span>
             <span class="grow"></span>
-            <button class="btn btn-sm only-sm" type="button" @click="store.mobilePanel = store.mobilePanel === 'left' ? null : 'left'"><icon name="panelLeft" />Library</button>
+            <button class="icon-btn only-sm" type="button" title="Library" aria-label="Library" @click="store.mobilePanel = store.mobilePanel === 'left' ? null : 'left'"><icon name="panelLeft" /></button>
             <button class="btn btn-sm health-btn" :class="health.cls" type="button" @click="showOverview" title="Story check">
                 <icon :name="health.icon" /><span class="hide-md">{{ health.label }}</span>
             </button>
             <button class="icon-btn hide-sm" type="button" title="Help and shortcuts (?)" aria-label="Help" @click="store.helpOpen = true"><icon name="help" /></button>
             <span class="topbar-divider hide-sm"></span>
-            <button class="btn" type="button" @click="openPreview(null)" title="Preview from the start (Ctrl+Enter)"><icon name="play" />Preview</button>
-            <button class="btn btn-primary" type="button" @click="store.publishOpen = true"><icon name="rocket" />Publish</button>
+            <button class="btn" type="button" @click="openPreview(null)" title="Preview from the start (Ctrl+Enter)" aria-label="Preview"><icon name="play" /><span class="hide-sm">Preview</span></button>
+            <button class="btn btn-primary" type="button" @click="store.publishOpen = true" aria-label="Publish"><icon name="rocket" /><span class="hide-sm">Publish</span></button>
         </header>
         <div class="workspace" :class="{ 'show-left': store.mobilePanel === 'left', 'show-right': store.mobilePanel === 'right' || (store.mobilePanel !== 'left' && selectedScene) }">
             <library />

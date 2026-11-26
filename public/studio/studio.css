@@ -502,6 +502,7 @@ img { display: block; max-width: 100%; }
 .scene-row b { display: block; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scene-row small { display: flex; gap: 6px; align-items: center; font-size: 11.5px; color: var(--text-3); margin-top: 2px; white-space: nowrap; overflow: hidden; }
 .scene-row .off-map { color: var(--gold); }
+.scene-row small .ico svg { width: 12px; height: 12px; }
 .music-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 9px; background: var(--panel-2); font-size: 12.5px; }
 .music-row svg { width: 15px; height: 15px; color: var(--text-3); flex-shrink: 0; }
 
@@ -985,6 +986,7 @@ img { display: block; max-width: 100%; }
 }
 
 .boot { height: 100vh; display: grid; place-items: center; color: var(--text-3); }
+.drawer-close { display: none; justify-content: flex-end; padding: 8px 10px 0; }
 
 /* ------------------------------------------------------------ Responsive */
 @media (max-width: 1280px) {
@@ -996,7 +998,14 @@ img { display: block; max-width: 100%; }
     .topbar .hide-md { display: none; }
 }
 @media (max-width: 900px) {
-    .workspace { grid-template-columns: 0 minmax(0, 1fr) 0; }
+    /* The library and inspector become drawers (position: fixed), so the
+       map is the only grid item and must get the only column. */
+    .workspace, .workspace.left-collapsed { grid-template-columns: minmax(0, 1fr); }
+    .topbar { gap: 6px; padding: 0 8px; }
+    .title-input { min-width: 0; flex: 1 1 auto; width: 0; font-size: 15px; }
+    .topbar .grow { display: none; }
+    .drawer-close { display: flex !important; }
+    .map-toolbar { flex-wrap: wrap; max-width: calc(100% - 24px); }
     .workspace .library { position: fixed; left: 0; top: var(--topbar); bottom: 0; width: min(320px, 86vw); z-index: 40; transform: translateX(-100%); transition: transform 180ms ease; visibility: visible; box-shadow: var(--shadow); }
     .workspace.show-left .library { transform: none; }
     .workspace .inspector { position: fixed; right: 0; top: var(--topbar); bottom: 0; width: min(380px, 92vw); z-index: 40; transform: translateX(100%); transition: transform 180ms ease; box-shadow: var(--shadow); }

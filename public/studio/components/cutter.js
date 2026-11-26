@@ -352,7 +352,7 @@ export const Cutter = {
         function close() {
             if (videoEl.value) videoEl.value.pause();
             store.cutter = null;
-            store.mapFocus += 1;
+            store.fitRequest += 1;
         }
 
         function onKey(event) {

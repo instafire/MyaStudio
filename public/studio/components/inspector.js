@@ -4,7 +4,7 @@ import {
     store, scenes, mapScenes, analysis, selectedScene, modeOf, endPointOf, momentsOf, select, updateScene,
     saveChoices, setMode, setStart, addChoice, removeChoice, removePoint, addMoment, openPreview, openCutter,
     duplicateScene, deleteScene, removeFromMap, captureThumbnail, uploadSubtitles, removeSubtitles,
-    sourceVideoOf, issuesFor, sceneLabel, flagNames, updateProject, uploadFiles, clipById, reachable
+    sourceVideoOf, issuesFor, sceneLabel, flagNames, updateProject, uploadFiles, clipById, reachable, ensureOnMap
 } from '../store.js';
 import { fmt, fmtPrecise, fmtDuration, sceneName, videoName, round, clamp } from '../util.js';
 
@@ -59,6 +59,7 @@ const ChoicePointEditor = {
                 choice.action = 'scene';
                 choice.to = value || null;
                 if (value && !choice.label) choice.label = sceneLabel(value);
+                if (value) ensureOnMap(value, props.clip);
             }
             save();
         };
@@ -192,7 +193,10 @@ const SceneInspector = {
             if (value !== props.clip.name) updateScene(props.clip, { name: value });
         };
         const onTime = () => { if (videoEl.value) currentTime.value = videoEl.value.currentTime || 0; };
-        const setNext = value => updateScene(props.clip, { nextClipId: value || null });
+        const setNext = value => {
+            updateScene(props.clip, { nextClipId: value || null });
+            if (value) ensureOnMap(value, props.clip);
+        };
         const endingTitle = computed({
             get: () => props.clip.ending_title || '',
             set: value => updateScene(props.clip, { endingTitle: value })
@@ -386,7 +390,7 @@ const MovieOverview = {
             const hasChoice = Object.values(store.points).some(list => list.some(point => point.choices.some(choice => choice.to || choice.action === 'end')));
             const noDeadEnds = hasChoice && !result.issues.some(issue => issue.code === 'dead-end' || issue.code === 'no-target');
             const list = [
-                { key: 'video', text: 'Upload a video', done: hasVideo, action: () => { store.leftTab = 'media'; } },
+                { key: 'video', text: 'Upload a video', done: hasVideo, action: () => { store.leftTab = 'media'; if (uploadInput.value) uploadInput.value.click(); } },
                 { key: 'scene', text: 'Cut it into scenes', done: hasScene, action: () => { if (store.videos.length) openCutter(store.videos[0].id); } },
                 { key: 'start', text: 'Choose where the movie starts', done: hasStart, action: () => {} },
                 { key: 'choice', text: 'Add a choice between scenes', done: hasChoice, action: () => {} },
@@ -399,6 +403,12 @@ const MovieOverview = {
             return list;
         });
         const doneCount = computed(() => steps.value.filter(step => step.done).length);
+        const uploadInput = ref(null);
+        const onUpload = event => {
+            const files = event.target.files;
+            if (files && files.length) uploadFiles(files);
+            event.target.value = '';
+        };
         const hints = {
             start: 'Select a scene on the map and click "Make start".',
             choice: 'Select a scene, choose "Choices" under "When this scene ends", or drag from a scene\'s + dot to another scene.',
@@ -431,7 +441,7 @@ const MovieOverview = {
             select(startScene.value.unique_id);
             store.mapFocus += 1;
         };
-        return { store, steps, doneCount, hints, issues, fix, genre, synopsis, saveDetails, stats, startScene, selectStart, sceneName, openPreview };
+        return { store, steps, doneCount, hints, issues, fix, genre, synopsis, saveDetails, stats, startScene, selectStart, sceneName, openPreview, uploadInput, onUpload };
     },
     template: `
     <div>
@@ -448,6 +458,7 @@ const MovieOverview = {
             <p class="hint" style="margin: 10px 0 0" v-if="startScene">Starts with <button class="link-btn" type="button" @click="selectStart">{{ sceneName(startScene) }}</button></p>
         </div>
         <div class="panel-section" v-if="doneCount < steps.length">
+            <input ref="uploadInput" type="file" accept="video/*,audio/*,.mkv,.mov,.m4v" multiple hidden @change="onUpload">
             <h3 class="section-title">Getting started <span class="count">{{ doneCount }}/{{ steps.length }}</span></h3>
             <div class="progress-track" style="margin-bottom: 10px"><span :style="{ width: (doneCount / steps.length * 100) + '%' }"></span></div>
             <div class="checklist">
@@ -487,10 +498,15 @@ export const Inspector = {
     name: 'Inspector',
     components: { SceneInspector, MovieOverview },
     setup() {
-        return { store, selectedScene, flagNames };
+        const closeDrawer = () => {
+            store.mobilePanel = null;
+            select(null);
+        };
+        return { store, selectedScene, flagNames, closeDrawer };
     },
     template: `
     <aside class="inspector" aria-label="Inspector">
+        <div class="drawer-close"><button class="btn btn-sm btn-ghost" type="button" @click="closeDrawer"><icon name="x" />Close</button></div>
         <datalist id="mya-flags"><option v-for="flag in flagNames" :key="flag" :value="flag"></option></datalist>
         <scene-inspector v-if="selectedScene" :key="selectedScene.unique_id" :clip="selectedScene" />
         <movie-overview v-else />

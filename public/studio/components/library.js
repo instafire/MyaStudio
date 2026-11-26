@@ -66,6 +66,7 @@ export const Library = {
     },
     template: `
     <aside class="library" aria-label="Library">
+        <div class="drawer-close"><button class="btn btn-sm btn-ghost" type="button" @click="store.mobilePanel = null"><icon name="x" />Close</button></div>
         <div class="tabs" role="tablist">
             <button class="tab" role="tab" :class="{ 'is-active': store.leftTab === 'scenes' }" :aria-selected="store.leftTab === 'scenes'" @click="store.leftTab = 'scenes'">
                 <icon name="film" />Scenes <span class="count">{{ filtered.length }}</span>
@@ -92,7 +93,7 @@ export const Library = {
                         <span class="mono">{{ fmtDuration(clip.duration) }}</span>
                         <span v-if="!onMap(clip)" class="off-map">· Not on map</span>
                         <span v-else-if="!reachable.has(clip.unique_id) && store.project.start_clip_id" class="dim">· Not connected</span>
-                        <span v-if="warn(clip)" style="color: var(--gold)">· Needs attention</span>
+                        <span v-if="warn(clip)" style="color: var(--gold); display:inline-flex" title="This scene needs attention: see the story check"><icon name="warning" style="width:12px;height:12px" /></span>
                     </small>
                 </div>
                 <span v-if="status(clip)" class="badge" :class="status(clip).cls">{{ status(clip).text }}</span>

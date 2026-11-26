@@ -184,7 +184,11 @@ export async function loadProjects() {
 export async function createProject(title) {
     const name = String(title || '').trim() || 'Untitled movie';
     try {
-        await api.post('/api/projects', { title: name });
+        const result = await api.post('/api/projects', { title: name });
+        if (result && result.projectId) {
+            go(`#/movie/${result.projectId}`);
+            return;
+        }
         const projects = await api.get('/api/projects');
         store.projects = projects;
         const created = projects.find(project => project.title === name) || projects[0];
@@ -313,6 +317,7 @@ export async function refreshProject() {
 export function select(sceneId, choiceKey = null) {
     store.selection = { sceneId: sceneId || null, choiceKey: choiceKey || null };
     if (sceneId) store.mobilePanel = store.mobilePanel === 'left' ? null : store.mobilePanel;
+    else if (store.mobilePanel === 'left') store.mobilePanel = null;
 }
 
 // ---- Saving ---------------------------------------------------------------------
@@ -735,33 +740,40 @@ function pointsOf(clip) {
     return store.points[id];
 }
 
+// Returns the scene's end-of-scene choice point, creating it when the scene
+// isn't in "choices" mode yet. Existing moments during the scene stay
+// moments: the new point always goes after them.
 export function ensureEndPoint(clip) {
     const points = pointsOf(clip);
-    if (modeOf(clip) !== 'choices' || !points.length) {
-        if (clip.next_clip_id || Number(clip.is_ending)) {
-            updateScene(clip, { nextClipId: null, isEnding: false });
-        }
-        delete store.modeOverride[clip.unique_id];
-        const point = reactive({
-            id: U.uid('point'),
-            time: U.defaultChoiceTime(clip.duration),
-            prompt: '',
-            timeLimit: 0,
-            shuffle: false,
-            pause: false,
-            choices: []
-        });
-        points.push(point);
-        points.sort((a, b) => a.time - b.time);
-        // keep the new point last: it is the end-of-scene decision
-        const index = points.indexOf(point);
-        if (index !== points.length - 1) {
-            points.splice(index, 1);
-            points.push(point);
-            point.time = Math.max(point.time, ...points.slice(0, -1).map(item => item.time + 0.5));
-        }
+    if (modeOf(clip) === 'choices' && points.length) return points[points.length - 1];
+    if (clip.next_clip_id || Number(clip.is_ending)) {
+        updateScene(clip, { nextClipId: null, isEnding: false });
     }
-    return points[points.length - 1];
+    delete store.modeOverride[clip.unique_id];
+    const duration = Number(clip.duration) || 0;
+    const lastMoment = points.length ? points[points.length - 1].time : -Infinity;
+    let time = U.defaultChoiceTime(duration);
+    if (time <= lastMoment) time = duration ? Math.min(duration, U.round(lastMoment + 0.5, 0.1)) : lastMoment + 0.5;
+    const point = reactive({
+        id: U.uid('point'),
+        time,
+        prompt: '',
+        timeLimit: 0,
+        shuffle: false,
+        pause: false,
+        choices: []
+    });
+    points.push(point);
+    return point;
+}
+
+// Targets picked from a list may not be on the story map yet; put them
+// next to the scene that leads to them so the new connection is visible.
+export function ensureOnMap(targetId, near) {
+    const target = clipById.value.get(targetId);
+    if (!target || mapScenes.value.includes(target)) return;
+    const pos = nextFreePosition(near);
+    placeOnMap(target, pos.x, pos.y);
 }
 
 export function addChoice(clip, { to = null, label = '', point = null } = {}) {
@@ -785,6 +797,7 @@ export function connectChoice(clip, choiceKey, targetId) {
             choice.action = 'scene';
             choice.to = targetId;
             if (!choice.label) choice.label = sceneLabel(targetId);
+            ensureOnMap(targetId, clip);
             saveChoices(clip.unique_id);
             select(clip.unique_id, choice.key);
             return choice;
@@ -797,6 +810,7 @@ export function connectNext(clip, targetId) {
     if (targetId === clip.unique_id) return;
     delete store.modeOverride[clip.unique_id];
     updateScene(clip, { nextClipId: targetId, isEnding: false });
+    ensureOnMap(targetId, clip);
     select(clip.unique_id);
 }
 
@@ -870,9 +884,8 @@ export async function setMode(clip, mode) {
         saveChoices(clip.unique_id);
     }
     if (mode === 'choices') {
-        updateScene(clip, { nextClipId: null, isEnding: false });
-        delete store.modeOverride[clip.unique_id];
         const point = ensureEndPoint(clip);
+        delete store.modeOverride[clip.unique_id];
         if (!point.choices.length) {
             point.choices.push(reactive(U.newChoice()));
             point.choices.push(reactive(U.newChoice()));
