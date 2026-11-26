@@ -1,263 +1,159 @@
+// Published movie page + story building from database rows.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const {
-    buildPublishedPlayerHtml,
+    buildPlayerPageHtml,
     collectReachableClipIds,
-    serializeInlineJson
+    serializeInlineJson,
+    PLAYER_ASSET_FILES
 } = require('../lib/published-player');
+const storyLib = require('../lib/story');
+const Story = require('../public/player/story-core.js');
 
-test('collectReachableClipIds excludes unused library clips from published movies', () => {
-    const reachable = collectReachableClipIds(
-        [{ id: 'start' }],
-        [
-            { from_id: 'start', to_id: 'branch-a', action_type: 'target' },
-            { from_id: 'start', to_id: 'ending', action_type: 'target' },
-            { from_id: 'branch-a', to_id: 'nested', action_type: 'target' },
-            { from_id: 'unused', to_id: 'unused-ending', action_type: 'target' },
-            { from_id: 'start', to_id: 'ignored-next-target', action_type: 'next' }
-        ]
-    );
+const playerSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'player', 'mya-player.js'), 'utf8');
 
-    assert.deepEqual([...reachable].sort(), ['branch-a', 'ending', 'nested', 'start']);
+const rows = {
+    project: { id: 7, title: 'The <Two> Doors', synopsis: 'Pick a door & see', genre: 'Mystery', theme_color: '#22c55e', start_clip_id: 'hall' },
+    clips: [
+        { unique_id: 'hall', name: 'Hallway', filepath: '/clips/hall.mp4', thumbnail: '/thumbnails/hall.jpg', duration: 8, subtitle_path: '/subtitles/hall.vtt', bg_music: '/audio/theme.mp3', mute_audio: 0 },
+        { unique_id: 'red', name: 'Red door', filepath: '/clips/red.mp4', thumbnail: '/thumbnails/red.jpg', duration: 5, is_ending: 1, ending_title: 'Through the red door' },
+        { unique_id: 'garden', name: 'Garden', filepath: '/clips/garden.mp4', duration: 5, next_clip_id: 'red' },
+        { unique_id: 'unused', name: 'FULL: holiday.mp4', filepath: '/videos/holiday.mp4', duration: 40 }
+    ],
+    edges: [
+        { id: 2, from_id: 'hall', to_id: 'garden', label: 'Garden', trigger_time: 4, logic_id: 'pt1', time_limit: 10, is_default: 1, shuffle_choices: 1, pause_on_show: 0, prompt: 'Which way?', action_type: 'target', return_to_main: 0 },
+        { id: 1, from_id: 'hall', to_id: 'red', label: 'Red door', trigger_time: 4, logic_id: 'pt1', time_limit: 10, is_default: 0, shuffle_choices: 1, prompt: 'Which way?', action_type: 'target', return_to_main: 0, set_var: 'brave' },
+        { id: 3, from_id: 'red', to_id: null, label: 'Give up', trigger_time: 4.8, logic_id: null, action_type: 'end' }
+    ]
+};
+
+test('buildStory groups edges into choice points and maps every field', () => {
+    const story = storyLib.buildStory(rows);
+    assert.equal(story.startSceneId, 'hall');
+    assert.equal(story.themeColor, '#22c55e');
+    const point = story.choicePoints.find(item => item.id === 'pt1');
+    assert.equal(point.sceneId, 'hall');
+    assert.equal(point.time, 4);
+    assert.equal(point.timeLimit, 10);
+    assert.equal(point.shuffle, true);
+    assert.equal(point.prompt, 'Which way?');
+    // Choices keep their creation order (edge id), not the query order.
+    assert.deepEqual(point.choices.map(choice => choice.label), ['Red door', 'Garden']);
+    assert.equal(point.choices[1].isDefault, true);
+    assert.equal(point.choices[0].setFlag, 'brave');
+    const legacy = story.choicePoints.find(item => item.sceneId === 'red');
+    assert.match(legacy.id, /^legacy_red_/);
+    assert.equal(legacy.choices[0].action, 'end');
+    const red = story.scenes.find(scene => scene.id === 'red');
+    assert.deepEqual(red.ending, { title: 'Through the red door' });
+    assert.equal(story.scenes.find(scene => scene.id === 'garden').next, 'red');
+    assert.equal(story.scenes.find(scene => scene.id === 'hall').subtitles, '/subtitles/hall.vtt');
+    // Source clips read like videos, not like "FULL: file.mp4".
+    assert.equal(story.scenes.find(scene => scene.id === 'unused').name, 'holiday');
+});
+
+test('reachableOnly keeps just what a viewer can reach from the start scene', () => {
+    const story = storyLib.reachableOnly(storyLib.buildStory(rows));
+    assert.deepEqual(story.scenes.map(scene => scene.id).sort(), ['garden', 'hall', 'red']);
+    const assets = storyLib.collectAssets(story).map(asset => asset.path);
+    assert.ok(assets.includes('/clips/hall.mp4'));
+    assert.ok(assets.includes('/audio/theme.mp3'));
+    assert.ok(!assets.includes('/videos/holiday.mp4'));
+});
+
+test('mapStoryAssets rewrites every media path for the export folder', () => {
+    const story = storyLib.reachableOnly(storyLib.buildStory(rows));
+    const mapped = storyLib.mapStoryAssets(story, (webPath, kind) => `${kind === 'audio' ? 'audio' : 'clips'}/${path.basename(webPath)}`);
+    const hall = mapped.scenes.find(scene => scene.id === 'hall');
+    assert.equal(hall.src, 'clips/hall.mp4');
+    assert.equal(hall.music, 'audio/theme.mp3');
+    assert.equal(hall.subtitles, 'clips/hall.vtt');
+    // The original story is untouched.
+    assert.equal(story.scenes.find(scene => scene.id === 'hall').src, '/clips/hall.mp4');
 });
 
 test('serializeInlineJson escapes HTML-breaking characters for inline scripts', () => {
-    const serialized = serializeInlineJson([
-        {
-            name: 'End </script> Test',
-            meta: 'A&B',
-            separators: '\u2028\u2029'
-        }
+    const json = serializeInlineJson({ label: '</script><script>alert(1)</script>', amp: 'a & b', sep: '\u2028' });
+    assert.doesNotMatch(json, /<\/script>/i);
+    assert.doesNotMatch(json, /</);
+    assert.match(json, /\\u003C\/script\\u003E/);
+    assert.deepEqual(JSON.parse(json).label, '</script><script>alert(1)</script>');
+});
+
+test('the published page embeds the story safely and loads the shared player', () => {
+    const story = storyLib.buildStory(rows);
+    story.scenes[0].name = '</script><img src=x onerror=alert(1)>';
+    const html = buildPlayerPageHtml({ story, assetBase: 'player/', mode: 'published', storageKey: 'two_doors', analytics: true, posterUrl: 'clips/hall.jpg' });
+    assert.match(html, /<title>The &lt;Two&gt; Doors<\/title>/);
+    assert.match(html, /<meta property="og:image" content="clips\/hall\.jpg">/);
+    assert.match(html, /<script id="mya-story" type="application\/json">/);
+    assert.doesNotMatch(html, /<img src=x/);
+    assert.match(html, /data-mode="published"/);
+    assert.match(html, /data-storage-key="two_doors"/);
+    assert.match(html, /data-analytics="1"/);
+    assert.match(html, /<link rel="manifest" href="manifest.json">/);
+    for (const file of PLAYER_ASSET_FILES) assert.ok(html.includes(`player/${file}`), `${file} is referenced`);
+    const json = html.split('<script id="mya-story" type="application/json">')[1].split('</script>')[0];
+    const parsed = JSON.parse(json);
+    assert.equal(parsed.scenes[0].name, '</script><img src=x onerror=alert(1)>');
+});
+
+test('the preview page plays from a chosen scene without a manifest or analytics', () => {
+    const story = storyLib.buildStory(rows);
+    const html = buildPlayerPageHtml({ story, assetBase: '/player/', mode: 'preview', startSceneId: 'garden', manifest: false });
+    assert.match(html, /data-mode="preview"/);
+    assert.match(html, /data-start-scene="garden"/);
+    assert.doesNotMatch(html, /data-analytics/);
+    assert.doesNotMatch(html, /manifest\.json/);
+    assert.match(html, /src="\/player\/story-core\.js"/);
+});
+
+test('every player asset file ships in public/player', () => {
+    for (const file of PLAYER_ASSET_FILES) {
+        assert.ok(fs.existsSync(path.join(__dirname, '..', 'public', 'player', file)), `${file} exists`);
+    }
+});
+
+test('the player is accessible and keyboard friendly', () => {
+    assert.match(playerSource, /aria-live/);
+    assert.match(playerSource, /role: 'group', 'aria-label': 'Choices'/);
+    assert.match(playerSource, /\/\^\[1-9\]\$\/\.test\(key\)/, 'number keys pick choices');
+    assert.match(playerSource, /case 'b':/, 'B goes back to the previous choice');
+    assert.match(playerSource, /toggleCaptions/);
+    assert.match(playerSource, /toggleFullscreen/);
+    assert.match(playerSource, /Back to last choice/);
+    assert.match(playerSource, /Watch again/);
+});
+
+test('the player only reports viewer choices for published, analytics-enabled movies', () => {
+    const body = playerSource.slice(playerSource.indexOf('function trackChoice'), playerSource.indexOf('// ---- Start / end screens'));
+    assert.match(body, /if \(isPreview \|\| !opts\.analytics/);
+    assert.match(body, /keepalive: true/);
+    assert.match(body, /\.catch\(/);
+});
+
+test('the player holds the last frame while choices are open and keeps decisions unskippable', () => {
+    assert.match(playerSource, /choice\.holding = true/);
+    assert.match(playerSource, /engine\.pointDue\(/);
+    assert.match(playerSource, /engine\.sceneEnded\(\)/);
+});
+
+test('collectReachableClipIds (legacy helper) follows target edges only', () => {
+    const reachable = collectReachableClipIds([{ id: 'a' }], [
+        { from_id: 'a', to_id: 'b', action_type: 'target' },
+        { from_id: 'b', to_id: 'c' },
+        { from_id: 'a', to_id: 'z', action_type: 'end' },
+        { from_id: 'x', to_id: 'y', action_type: 'target' }
     ]);
-
-    assert.match(serialized, /\\u003C\/script\\u003E/);
-    assert.match(serialized, /\\u0026/);
-    assert.match(serialized, /\\u2028/);
-    assert.match(serialized, /\\u2029/);
-    assert.doesNotMatch(serialized, /End <\/script> Test/);
+    assert.deepEqual([...reachable].sort(), ['a', 'b', 'c']);
 });
 
-test('buildPublishedPlayerHtml keeps choice labels visible and embeds data without JSON.parse wrappers', () => {
-    const html = buildPublishedPlayerHtml({
-        safeTitle: 'Audit Publish',
-        themeColor: '#112233',
-        clips: [
-            {
-                unique_id: 'clip-1',
-                name: 'End </script> Test',
-                filepath: 'clips/clip-1.mp4',
-                thumbnail: 'clips/clip-1.jpg',
-                mute_audio: 0,
-                is_event_clip: 0,
-                bg_music: null
-            }
-        ],
-        logicBlocks: [
-            {
-                id: 'logic-1',
-                from: 'clip-1',
-                time: 1.8,
-                choices: [{ to: 'clip-1', label: 'Go somewhere', color: '#ffffff', return: false, action: 'target' }]
-            }
-        ],
-        seq: [{ id: 'clip-1', name: 'Clip 1', startTime: 0 }],
-        projectId: 99
-    });
-
-    assert.match(html, /class="choice-content"/);
-    assert.match(html, /\{\{ ch\.label \|\| 'Choice' \}\}/);
-    assert.match(html, /const CLIPS = \[/);
-    assert.doesNotMatch(html, /JSON\.parse\('/);
-    assert.match(html, /End \\u003C\/script\\u003E Test/);
-    assert.doesNotMatch(html, /End <\/script> Test/);
-});
-
-test('published player exposes accessible choices, keyboard shortcuts, and a replayable ending', () => {
-    const html = buildPublishedPlayerHtml({
-        safeTitle: 'Branch Test',
-        themeColor: '#2563eb',
-        clips: [
-            {
-                unique_id: 'main',
-                name: 'Main story',
-                filepath: 'clips/main.mp4',
-                thumbnail: 'clips/main.jpg',
-                duration: 12,
-                mute_audio: 0,
-                is_event_clip: 0,
-                bg_music: null
-            },
-            {
-                unique_id: 'branch',
-                name: 'Branch',
-                filepath: 'clips/branch.mp4',
-                thumbnail: 'clips/branch.jpg',
-                duration: 3,
-                mute_audio: 0,
-                is_event_clip: 0,
-                bg_music: null
-            }
-        ],
-        logicBlocks: [
-            {
-                id: 'decision',
-                from: 'main',
-                time: 4,
-                choices: [{ to: 'branch', label: 'Take the branch', color: '#f8fafc', return: true, action: 'target' }]
-            }
-        ],
-        seq: [{ id: 'main', name: 'Main story', startTime: 0 }],
-        projectId: 7
-    });
-
-    assert.match(html, /role="dialog" aria-modal="true" aria-labelledby="choice-heading"/);
-    assert.match(html, /What happens next\?/);
-    assert.match(html, /handleKey/);
-    assert.match(html, /Replay from the beginning/);
-    assert.match(html, /Math\.max\(0, Math\.min/);
-});
-
-test('published player ships playback controls, shortcuts overlay, journey recap, loading spinner, and back-to-decision', () => {
-    const html = buildPublishedPlayerHtml({
-        safeTitle: 'Controls Test',
-        themeColor: '#2563eb',
-        clips: [
-            {
-                unique_id: 'main',
-                name: 'Main story',
-                filepath: 'clips/main.mp4',
-                thumbnail: 'clips/main.jpg',
-                duration: 12,
-                mute_audio: 0,
-                is_event_clip: 0,
-                bg_music: null
-            }
-        ],
-        logicBlocks: [],
-        seq: [{ id: 'main', name: 'Main story', startTime: 0 }],
-        projectId: 7
-    });
-
-    // Playback controls
-    assert.match(html, /toggleMute/);
-    assert.match(html, /togglePlay/);
-    assert.match(html, /seekBy/);
-    assert.match(html, /changeVolume/);
-    assert.match(html, /copyLink/);
-    assert.match(html, /cycleSpeed/);
-    assert.match(html, /toggleFullscreen/);
-    // Keyboard shortcuts
-    assert.match(html, /showShortcuts/);
-    assert.match(html, /Keyboard shortcuts/);
-    assert.match(html, /key === '\?'/);
-    // Decision history + back button
-    assert.match(html, /decisionHistory/);
-    assert.match(html, /goBackToDecision/);
-    assert.match(html, /timeline-back/);
-    // Journey recap on the end screen
-    assert.match(html, /journeyLog/);
-    assert.match(html, /journey-list/);
-    assert.match(html, /endReason/);
-    // Loading indicator
-    assert.match(html, /class="loader"/);
-    assert.match(html, /isLoading/);
-    // Per-clip mute respects the user's mute choice
-    assert.match(html, /v\.muted = this\.userMuted/);
-});
-
-test('published player provides a seekable scene timeline and accessible decision markers', () => {
-    const html = buildPublishedPlayerHtml({
-        safeTitle: 'Timeline Test',
-        themeColor: '#2563eb',
-        clips: [{ unique_id: 'main', name: 'Main', filepath: 'clips/main.mp4', thumbnail: '', duration: 60, mute_audio: 0, is_event_clip: 0, bg_music: null }],
-        logicBlocks: [
-            { id: 'first-choice', from: 'main', time: 15, choices: [{ to: 'main', label: 'Wait', action: 'target' }] },
-            { id: 'ending-choice', from: 'main', time: 45, choices: [{ to: 'main', label: 'Finish', action: 'target' }] }
-        ],
-        seq: [{ id: 'main', name: 'Main', startTime: 0 }],
-        projectId: 10
-    });
-
-    assert.match(html, /class="timeline-hud"/);
-    assert.match(html, /class="timeline-scrubber"/);
-    assert.match(html, /type="range"/);
-    assert.match(html, /@input="seekTimeline"/);
-    assert.match(html, /seekToDecision\(decision\)/);
-    assert.match(html, /rebuildActiveBlocks/);
-    assert.match(html, /v-for="\(decision, index\) in timelineDecisions"/);
-    assert.match(html, /Next choice/);
-    assert.match(html, /Choice ' \+ \(index \+ 1\) \+ ' at '/);
-});
-
-test('published analytics queue is retained when the server rejects an event', () => {
-    const html = buildPublishedPlayerHtml({
-        safeTitle: 'Analytics Test',
-        themeColor: '#2563eb',
-        clips: [{ unique_id: 'main', name: 'Main', filepath: 'clips/main.mp4', thumbnail: '', duration: 1, mute_audio: 0, is_event_clip: 0, bg_music: null }],
-        logicBlocks: [],
-        seq: [{ id: 'main', name: 'Main', startTime: 0 }],
-        projectId: 8
-    });
-
-    assert.match(html, /if \(!response\.ok\) throw new Error\('Analytics request failed'\)/);
-    assert.match(html, /Events stay queued for next attempt/);
-});
-
-test('published player previews choice clips on hover and resumes from the trigger moment by default', () => {
-    const html = buildPublishedPlayerHtml({
-        safeTitle: 'Preview Test',
-        themeColor: '#2563eb',
-        clips: [
-            { unique_id: 'main', name: 'Main story', filepath: 'clips/main.mp4', thumbnail: 'clips/main.jpg', duration: 12, mute_audio: 0, is_event_clip: 0, bg_music: null },
-            { unique_id: 'branch', name: 'Branch', filepath: 'clips/branch.mp4', thumbnail: 'clips/branch.jpg', duration: 4, mute_audio: 0, is_event_clip: 0, bg_music: null }
-        ],
-        logicBlocks: [
-            // Note: no explicit `return` flag on the choice — the default must kick in.
-            { id: 'decision', from: 'main', time: 4, choices: [{ to: 'branch', label: 'Take the branch', color: '#f8fafc', action: 'target' }] }
-        ],
-        seq: [{ id: 'main', name: 'Main story', startTime: 0 }],
-        projectId: 11
-    });
-
-    // Hover preview markup and handlers on each choice card.
-    assert.match(html, /class="choice-preview-video"/);
-    assert.match(html, /:src="getChoiceVideo\(ch\)"/);
-    assert.match(html, /@mouseenter="startChoicePreview\(ch, \$event\)"/);
-    assert.match(html, /@mouseleave="stopChoicePreview\(\$event\)"/);
-    assert.match(html, /@focus="startChoicePreview\(ch, \$event\)"/);
-    assert.match(html, /@blur="stopChoicePreview\(\$event\)"/);
-    assert.match(html, /choice-preview-badge/);
-    // Preview helper methods exist in the player script.
-    assert.match(html, /getChoiceVideo\(choice\)/);
-    assert.match(html, /getChoicePreviewStartTime\(choice\)/);
-    assert.match(html, /startChoicePreview\(choice, event\)/);
-    assert.match(html, /stopAllChoicePreviews\(except\)/);
-    assert.match(html, /video\.play\(\)\.catch\(\(\) => \{\}\)/);
-    // Return-to-trigger is the default when the flag is absent.
-    assert.match(html, /if \(choice\.return !== false\)/);
-    assert.match(html, /resumes from this exact moment/);
-    // Clicking a choice stops any running hover previews first.
-    assert.match(html, /this\.stopAllChoicePreviews\(\);/);
-});
-
-test('published player still honors an explicit permanent branch (return === false)', () => {
-    const html = buildPublishedPlayerHtml({
-        safeTitle: 'Permanent Branch Test',
-        themeColor: '#2563eb',
-        clips: [
-            { unique_id: 'main', name: 'Main story', filepath: 'clips/main.mp4', thumbnail: '', duration: 12, mute_audio: 0, is_event_clip: 0, bg_music: null },
-            { unique_id: 'ending', name: 'Ending', filepath: 'clips/ending.mp4', thumbnail: '', duration: 5, mute_audio: 0, is_event_clip: 0, bg_music: null }
-        ],
-        logicBlocks: [
-            { id: 'decision', from: 'main', time: 4, choices: [{ to: 'ending', label: 'Walk away', color: '#f8fafc', return: false, action: 'target' }] }
-        ],
-        seq: [{ id: 'main', name: 'Main story', startTime: 0 }],
-        projectId: 12
-    });
-
-    // The default-on return logic is present; explicit `return: false` in the
-    // serialized data keeps the branch permanent because `false !== false` is false.
-    assert.match(html, /if \(choice\.return !== false\)/);
-    assert.match(html, /"return":false/);
+test('stories built from rows pass the same story check the studio shows', () => {
+    const story = storyLib.reachableOnly(storyLib.buildStory(rows));
+    const result = Story.analyzeStory(story);
+    assert.equal(result.errors, 0);
+    assert.equal(result.stats.reachableScenes, 3);
 });

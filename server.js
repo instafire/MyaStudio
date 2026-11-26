@@ -9,7 +9,10 @@ const ffmpeg = require('fluent-ffmpeg');
 const ffmpegStatic = require('ffmpeg-static');
 const ffprobeStatic = require('ffprobe-static');
 const multer = require('multer');
-const { buildPublishedPlayerHtml, collectReachableClipIds } = require('./lib/published-player');
+const { buildPlayerPageHtml, PLAYER_ASSET_FILES } = require('./lib/published-player');
+const storyLib = require('./lib/story');
+const storyCore = require('./public/player/story-core.js');
+const { writeZip, listFiles } = require('./lib/zip');
 const { srtToVtt, looksLikeValidCues } = require('./lib/subtitles');
 const security = require('./lib/security');
 const {
@@ -104,7 +107,8 @@ folders.forEach(f => fs.ensureDirSync(path.join(__dirname, 'public', f)));
 // 2. DATABASE INIT
 let db;
 (async () => {
-    db = await open({ filename: './database.sqlite', driver: sqlite3.Database });
+    // MYA_DB_PATH lets tests (and multi-instance setups) use their own database.
+    db = await open({ filename: process.env.MYA_DB_PATH || './database.sqlite', driver: sqlite3.Database });
     
     // Core Tables
     await db.exec(`CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, theme_color TEXT DEFAULT '#3b82f6', genre TEXT DEFAULT 'Interactive story', synopsis TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);`);
@@ -131,7 +135,14 @@ let db;
         `ALTER TABLE edges ADD COLUMN time_limit REAL`,
         `ALTER TABLE edges ADD COLUMN is_default INTEGER DEFAULT 0`,
         `ALTER TABLE edges ADD COLUMN shuffle_choices INTEGER DEFAULT 0`,
-        `ALTER TABLE clips ADD COLUMN subtitle_path TEXT`
+        `ALTER TABLE clips ADD COLUMN subtitle_path TEXT`,
+        // Studio 2: explicit scene endings and "continue to" links.
+        `ALTER TABLE clips ADD COLUMN next_clip_id TEXT`,
+        `ALTER TABLE clips ADD COLUMN is_ending INTEGER DEFAULT 0`,
+        `ALTER TABLE clips ADD COLUMN ending_title TEXT`,
+        `ALTER TABLE edges ADD COLUMN pause_on_show INTEGER DEFAULT 0`,
+        `ALTER TABLE edges ADD COLUMN prompt TEXT`,
+        `ALTER TABLE projects ADD COLUMN updated_at DATETIME`
     ];
     for(let m of migrations) { try { await db.exec(m); } catch(e){} }
     await reconcileMediaRecords();
@@ -410,6 +421,13 @@ function normalizeVolume(volume) {
     return safeVolume;
 }
 
+// Web-friendly H.264 output: even frame dimensions (libx264 with yuv420p
+// requires them, and odd-sized phone exports otherwise fail to render), a
+// pixel format every browser decodes, and the index moved to the front of
+// the file so published movies start before they finish downloading.
+const EVEN_DIMENSIONS_FILTER = 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
+const WEB_VIDEO_OUTPUT_OPTIONS = ['-preset veryfast', '-crf 23', '-pix_fmt yuv420p', '-movflags +faststart'];
+
 function runFfmpeg(command) {
     return new Promise((resolve, reject) => {
         command.on('end', resolve).on('error', reject).run();
@@ -440,11 +458,12 @@ async function reencodeClipFile(clip, { filter = 'none', speed = 1, volume = 1 }
     if (safeFilter === 'sepia') videoFilters.push('colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131');
     if (safeFilter === 'vivid') videoFilters.push('eq=saturation=2');
     if (safeVolume !== 1) audioFilters.push(`volume=${safeVolume}`);
+    videoFilters.push(EVEN_DIMENSIONS_FILTER);
     if (audioFilters.length) command.audioFilters(audioFilters);
-    if (videoFilters.length) command.videoFilters(videoFilters);
+    command.videoFilters(videoFilters);
 
     await runFfmpeg(
-        command.videoCodec('libx264').audioCodec('aac').outputOptions('-preset ultrafast').output(outputPath)
+        command.videoCodec('libx264').audioCodec('aac').outputOptions(WEB_VIDEO_OUTPUT_OPTIONS).output(outputPath)
     );
 
     const webPath = `/clips/${outputFilename}`;
@@ -915,6 +934,8 @@ async function ensureBuilderVisibility(projectId) {
 
 async function cleanupClipReferences(uniqueId) {
     await db.run('DELETE FROM edges WHERE from_id = ? OR to_id = ?', [uniqueId, uniqueId]);
+    await db.run('UPDATE clips SET next_clip_id = NULL WHERE next_clip_id = ?', [uniqueId]);
+    await db.run('UPDATE clips SET timeout_to_id = NULL, timeout_seconds = NULL WHERE timeout_to_id = ?', [uniqueId]);
     await db.run('DELETE FROM analytics WHERE target_clip_id = ?', [uniqueId]);
     await db.run('UPDATE projects SET start_clip_id = NULL WHERE start_clip_id = ?', [uniqueId]);
 }
@@ -1111,6 +1132,22 @@ async function removeUnusedPublicAssets(paths) {
 }
 
 // --- ROUTES ---
+// Any successful change to a project bumps its "last edited" time, so the
+// project hub can show the most recently worked-on movies first.
+app.use('/api', (req, res, next) => {
+    if (req.method !== 'POST') return next();
+    res.on('finish', () => {
+        if (res.statusCode >= 400 || !db) return;
+        const body = req.body || {};
+        const fromProjectRoute = /^\/project\/(rename|settings|start_clip|update)$/.test(req.path) ? body.id : null;
+        const projectId = Number(body.projectId || fromProjectRoute || 0);
+        if (Number.isInteger(projectId) && projectId > 0) {
+            db.run('UPDATE projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?', [projectId]).catch(() => {});
+        }
+    });
+    next();
+});
+
 const DB_OPTIONAL_API_PATHS = new Set(['/audio', '/exports']);
 
 app.use('/api', security.requireMutationContentType, (req, res, next) => {
@@ -1193,16 +1230,18 @@ app.get('/api/projects', async (req, res) => {
                 `SELECT
                     (SELECT COUNT(*) FROM videos WHERE project_id = ?) AS video_count,
                     (SELECT COUNT(*) FROM clips WHERE project_id = ?) AS clip_count,
+                    (SELECT COUNT(*) FROM clips WHERE project_id = ? AND name NOT LIKE 'FULL:%') AS scene_count,
                     (SELECT COUNT(*) FROM edges WHERE project_id = ?) AS edge_count,
                     (SELECT COUNT(*) FROM clips WHERE project_id = ? AND COALESCE(favorite, 0) = 1) AS favorite_count,
                     (SELECT thumbnail FROM clips WHERE project_id = ? AND thumbnail IS NOT NULL AND thumbnail != '' ORDER BY CASE WHEN unique_id = ? THEN 0 ELSE 1 END, id ASC LIMIT 1) AS poster
                 `,
-                [project.id, project.id, project.id, project.id, project.id, project.start_clip_id || '']
+                [project.id, project.id, project.id, project.id, project.id, project.id, project.start_clip_id || '']
             );
             enriched.push({
                 ...project,
                 video_count: toFiniteNumber(stats && stats.video_count, 0),
                 clip_count: toFiniteNumber(stats && stats.clip_count, 0),
+                scene_count: toFiniteNumber(stats && stats.scene_count, 0),
                 edge_count: toFiniteNumber(stats && stats.edge_count, 0),
                 favorite_count: toFiniteNumber(stats && stats.favorite_count, 0),
                 poster: stats && stats.poster ? stats.poster : null
@@ -1292,9 +1331,9 @@ app.post('/api/projects/sample', async (req, res) => {
         const projectId = projectResult.lastID;
 
         const scenes = [
-            { name: 'The Hallway', hue: 210, dur: 6 },
-            { name: 'The Red Door', hue: 350, dur: 5 },
-            { name: 'The Garden', hue: 110, dur: 5 }
+            { name: 'The Hallway', hue: 210, dur: 8 },
+            { name: 'The Red Door', hue: 350, dur: 5, ending: 'Through the Red Door' },
+            { name: 'The Garden', hue: 110, dur: 5, ending: 'The Secret Garden' }
         ];
         const clipIds = [];
         let x = 120;
@@ -1310,30 +1349,34 @@ app.post('/api/projects/sample', async (req, res) => {
                     '-hide_banner', '-loglevel', 'error',
                     '-f', 'lavfi', '-i', `testsrc2=s=1280x720:d=${scene.dur}:r=30`,
                     '-vf', `hue=h=${scene.hue}`,
-                    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+                    '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+                    '-movflags', '+faststart',
                     '-y', outPath
                 ], (err) => err ? reject(err) : resolve());
             });
             createdFiles.push(outPath);
             const thumbnail = await generateThumbnail(outPath, filename);
             const webPath = `/clips/${filename}`;
+            const position = clipIds.length === 0 ? { x: 80, y: 200 } : { x: 460, y: clipIds.length === 1 ? 60 : 340 };
             await db.run(
-                'INSERT INTO clips (unique_id, project_id, name, filepath, thumbnail, source_video_id, duration, start_time, end_time, x, y, builder_visible) VALUES (?, ?, ?, ?, ?, NULL, ?, 0, ?, ?, 220, 1)',
-                [clipId, projectId, scene.name, webPath, thumbnail, scene.dur, scene.dur, x]
+                'INSERT INTO clips (unique_id, project_id, name, filepath, thumbnail, source_video_id, duration, start_time, end_time, x, y, builder_visible, is_ending, ending_title) VALUES (?, ?, ?, ?, ?, NULL, ?, 0, ?, ?, ?, 1, ?, ?)',
+                [clipId, projectId, scene.name, webPath, thumbnail, scene.dur, scene.dur, position.x, position.y, scene.ending ? 1 : 0, scene.ending || null]
             );
             clipIds.push(clipId);
             x += 420;
         }
 
-        const logicId = uuidv4();
+        // The hallway asks its question for the last 4 seconds with a
+        // 10-second timer; the garden is picked if the viewer doesn't choose.
+        const logicId = `point_${uuidv4()}`;
         const choices = [
-            { label: 'Open the red door', to: clipIds[1] },
-            { label: 'Enter the garden', to: clipIds[2] }
+            { label: 'Open the red door', to: clipIds[1], isDefault: 0 },
+            { label: 'Step into the garden', to: clipIds[2], isDefault: 1 }
         ];
         for (const choice of choices) {
             await db.run(
-                'INSERT INTO edges (project_id, from_id, to_id, label, text_color, trigger_time, logic_id, return_to_main, set_var, req_var, action_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                [projectId, clipIds[0], choice.to, choice.label, '#ffffff', 4.0, logicId, 1, '', '', 'target']
+                'INSERT INTO edges (project_id, from_id, to_id, label, text_color, trigger_time, logic_id, return_to_main, set_var, req_var, action_type, time_limit, is_default, prompt) VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?)',
+                [projectId, clipIds[0], choice.to, choice.label, '#ffffff', 4.0, logicId, 'target', 10, choice.isDefault, 'Which way do you go?']
             );
         }
         await db.run('UPDATE projects SET start_clip_id = ? WHERE id = ?', [clipIds[0], projectId]);
@@ -1359,7 +1402,7 @@ app.post('/api/project/duplicate', async (req, res) => {
                 'projects',
                 sourceProject,
                 { title: duplicateTitle, start_clip_id: null },
-                ['id', 'created_at']
+                ['id', 'created_at', 'updated_at']
             );
             const projectResult = await db.run(projectInsert.sql, projectInsert.values);
             const newProjectId = projectResult.lastID;
@@ -1384,7 +1427,8 @@ app.post('/api/project/duplicate', async (req, res) => {
                         unique_id: sourceClipIdMap.get(clip.unique_id),
                         project_id: newProjectId,
                         source_video_id: clip.source_video_id ? (sourceVideoIdMap.get(clip.source_video_id) || null) : null,
-                        timeout_to_id: clip.timeout_to_id ? (sourceClipIdMap.get(clip.timeout_to_id) || null) : null
+                        timeout_to_id: clip.timeout_to_id ? (sourceClipIdMap.get(clip.timeout_to_id) || null) : null,
+                        next_clip_id: clip.next_clip_id ? (sourceClipIdMap.get(clip.next_clip_id) || null) : null
                     },
                     ['id']
                 );
@@ -1600,15 +1644,18 @@ async function finalizeUploadedMedia({ absPath, filename, originalname, mimetype
             [projectId, originalname, webPath, thumbnail, duration]
         );
         const clipId = uuidv4();
+        // The FULL source clip stays off the story map: the studio shows the
+        // upload as media, and scenes are cut from it (or use all of it).
         await db.run(
-            'INSERT INTO clips (unique_id, project_id, name, filepath, thumbnail, source_video_id, duration, x, y, builder_visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
+            'INSERT INTO clips (unique_id, project_id, name, filepath, thumbnail, source_video_id, duration, x, y, builder_visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)',
             [clipId, projectId, `FULL: ${originalname}`, webPath, thumbnail, result.lastID, duration, 100, 100]
         );
+        const video = await db.get('SELECT * FROM videos WHERE id = ?', [result.lastID]);
+        return { success: true, type: 'video', video };
     } catch (err) {
         await fs.remove(absPath).catch(() => {});
         throw err;
     }
-    return { success: true, type: 'video' };
 }
 
 app.post('/api/upload', upload.single('file'), async (req, res) => {
@@ -1756,8 +1803,41 @@ app.post('/api/delete_video', async (req, res) => {
     }
 });
 
+// Renders one scene from a source video: [start, end) with optional look,
+// speed and volume. Resolves with the output's real duration.
+async function renderSceneFile(sourcePath, outputPath, { startTime, endTime, filter = 'none', speed = 1, volume = 1 }) {
+    const safeFilter = normalizeFilter(filter);
+    const safeSpeed = normalizeSpeed(speed);
+    const safeVolume = normalizeVolume(volume);
+    let duration = endTime - startTime;
+    const command = ffmpeg(sourcePath).setStartTime(startTime).setDuration(duration);
+    const audioFilters = [];
+    const videoFilters = [];
+    if (safeSpeed !== 1) {
+        audioFilters.push(`atempo=${safeSpeed}`);
+        videoFilters.push(`setpts=${1 / safeSpeed}*PTS`);
+        duration = duration / safeSpeed;
+    }
+    if (safeFilter === 'bw') videoFilters.push('hue=s=0');
+    if (safeFilter === 'sepia') videoFilters.push('colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131');
+    if (safeFilter === 'vivid') videoFilters.push('eq=saturation=2');
+    if (safeVolume !== 1) audioFilters.push(`volume=${safeVolume}`);
+    videoFilters.push(EVEN_DIMENSIONS_FILTER);
+    if (audioFilters.length) command.audioFilters(audioFilters);
+    command.videoFilters(videoFilters);
+    await runFfmpeg(
+        command.videoCodec('libx264').audioCodec('aac').outputOptions(WEB_VIDEO_OUTPUT_OPTIONS).output(outputPath)
+    );
+    try {
+        const probed = await probeDuration(outputPath);
+        if (probed > 0) duration = probed;
+    } catch (_) { /* keep the computed duration */ }
+    return duration;
+}
+
 app.post('/api/clip', async (req, res) => {
-    const { projectId, sourceId, start, end, name, filter, speed, volume } = req.body;
+    const { projectId, sourceId, start, end, name, filter, speed, volume } = req.body || {};
+    let outputPath = null;
     try {
         ensureDbReady();
         const safeProjectId = parseRequiredId(projectId, 'projectId');
@@ -1767,61 +1847,27 @@ app.post('/api/clip', async (req, res) => {
         if (toFiniteNumber(video.project_id, 0) !== safeProjectId) {
             return res.status(404).json({ error: 'Source video not found in this project' });
         }
-        const clipName = ensureName(name, 'Clip name is required');
+        const clipName = ensureName(name, 'Clip name is required').slice(0, 120);
         const { startTime, endTime } = validateClipWindow(start, end, video.duration);
+        if (endTime - startTime < 0.2) throw createHttpError('A scene must be at least 0.2 seconds long', 400);
         const clipId = uuidv4();
         const outputFilename = `clip_${clipId}.mp4`;
-        const outputPath = path.join(__dirname, 'public/clips', outputFilename);
-
-        const safeFilter = String(filter || 'none').toLowerCase();
-        if (!['none', 'bw', 'sepia', 'vivid'].includes(safeFilter)) throw createHttpError('Invalid filter', 400);
-        const safeSpeed = toFiniteNumber(speed, 1);
-        if (safeSpeed <= 0) throw createHttpError('Invalid speed', 400);
-        if (safeSpeed < 0.5 || safeSpeed > 2) throw createHttpError('Speed must be between 0.5 and 2.0', 400);
-        const safeVolume = toFiniteNumber(volume, 1);
-        if (!Number.isFinite(safeVolume) || safeVolume < 0) throw createHttpError('Invalid volume', 400);
-
-        let duration = endTime - startTime;
-        let responded = false;
-        let command = ffmpeg(sourcePath).setStartTime(startTime).setDuration(duration);
-        const audioFilters = [];
-        const videoFilters = [];
-        if (safeSpeed !== 1) {
-            audioFilters.push(`atempo=${safeSpeed}`);
-            duration = duration / safeSpeed;
-            videoFilters.push(`setpts=${1 / safeSpeed}*PTS`);
-        }
-        if (safeFilter === 'bw') videoFilters.push('hue=s=0');
-        if (safeFilter === 'sepia') videoFilters.push('colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131');
-        if (safeFilter === 'vivid') videoFilters.push('eq=saturation=2');
-        if (safeVolume !== 1) audioFilters.push(`volume=${safeVolume}`);
-        if (audioFilters.length) command.audioFilters(audioFilters);
-        if (videoFilters.length) command.videoFilters(videoFilters);
-        
-        command.videoCodec('libx264').audioCodec('aac').outputOptions('-preset ultrafast').output(outputPath).on('end', async () => {
-            try {
-                if (responded) return;
-                const thumbnail = await generateThumbnail(outputPath, outputFilename); 
-                const webPath = `/clips/${outputFilename}`;
-                await db.run(
-                    'INSERT INTO clips (unique_id, project_id, name, filepath, thumbnail, source_video_id, duration, start_time, end_time, x, y, builder_visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
-                    [clipId, safeProjectId, clipName, webPath, thumbnail, sourceId, duration, startTime, endTime, 150, 150]
-                );
-                responded = true;
-                res.json({ success: true });
-            } catch (err) {
-                console.error(err);
-                if (!responded) sendApiError(res, err, 'Could not save clip');
-            }
-        }).on('error', (err) => {
-            console.error(err);
-            if (!responded) {
-                responded = true;
-                res.status(500).json({ error: 'Render Failed' });
-            }
-        }).run();
+        outputPath = path.join(__dirname, 'public/clips', outputFilename);
+        const duration = await renderSceneFile(sourcePath, outputPath, { startTime, endTime, filter, speed, volume });
+        const thumbnail = await generateThumbnail(outputPath, outputFilename);
+        const webPath = `/clips/${outputFilename}`;
+        const x = req.body && req.body.x !== undefined ? toFiniteNumber(req.body.x, 150) : 150;
+        const y = req.body && req.body.y !== undefined ? toFiniteNumber(req.body.y, 150) : 150;
+        await db.run(
+            'INSERT INTO clips (unique_id, project_id, name, filepath, thumbnail, source_video_id, duration, start_time, end_time, x, y, builder_visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
+            [clipId, safeProjectId, clipName, webPath, thumbnail, video.id, duration, startTime, endTime, x, y]
+        );
+        const clip = await db.get('SELECT * FROM clips WHERE unique_id = ?', [clipId]);
+        res.json({ success: true, clip });
     } catch (err) {
-        sendApiError(res, err);
+        if (outputPath) await fs.remove(outputPath).catch(() => {});
+        if (!(err && err.statusCode)) console.error(err);
+        sendApiError(res, err, 'Could not render this scene');
     }
 });
 
@@ -1956,9 +2002,9 @@ app.post('/api/create_event_clip', async (req, res) => {
         let duration = endTime - startTime;
         let responded = false;
 
-        let command = ffmpeg(sourcePath).setStartTime(startTime).setDuration(duration);
+        let command = ffmpeg(sourcePath).setStartTime(startTime).setDuration(duration).videoFilters([EVEN_DIMENSIONS_FILTER]);
         
-        command.videoCodec('libx264').audioCodec('aac').outputOptions('-preset ultrafast').output(outputPath).on('end', async () => {
+        command.videoCodec('libx264').audioCodec('aac').outputOptions(WEB_VIDEO_OUTPUT_OPTIONS).output(outputPath).on('end', async () => {
             try {
                 if (responded) return;
                 const thumbnail = await generateThumbnail(outputPath, outputFilename); 
@@ -2115,9 +2161,10 @@ app.post('/api/clip/split', async (req, res) => {
                 ffmpeg(sourcePath)
                     .setStartTime(start)
                     .setDuration(partDuration)
+                    .videoFilters([EVEN_DIMENSIONS_FILTER])
                     .videoCodec('libx264')
                     .audioCodec('aac')
-                    .outputOptions(['-preset ultrafast'])
+                    .outputOptions(WEB_VIDEO_OUTPUT_OPTIONS)
                     .output(outputPath)
             );
             const thumb = await generateThumbnail(outputPath, filename);
@@ -2531,7 +2578,8 @@ app.post('/api/project/import', async (req, res) => {
                         unique_id: sourceClipIdMap.get(clip.unique_id),
                         project_id: newProjectId,
                         source_video_id: clip.source_video_id ? (sourceVideoIdMap.get(clip.source_video_id) || null) : null,
-                        timeout_to_id: clip.timeout_to_id ? (sourceClipIdMap.get(clip.timeout_to_id) || null) : null
+                        timeout_to_id: clip.timeout_to_id ? (sourceClipIdMap.get(clip.timeout_to_id) || null) : null,
+                        next_clip_id: clip.next_clip_id ? (sourceClipIdMap.get(clip.next_clip_id) || null) : null
                     },
                     ['id']
                 );
@@ -3134,115 +3182,522 @@ app.post('/api/ai/validate', async (req, res) => {
     }
 });
 
-// --- PUBLISH ENGINE ---
-app.post('/api/publish', async (req, res) => {
-    const { projectId, title, sequence } = req.body;
+// --- STUDIO 2 API -------------------------------------------------------------
+// The studio editor loads everything it needs for one project in one call and
+// saves a scene's settings / choices with a couple of focused endpoints.
+
+function sanitizeFlagName(value, allowNegation = false) {
+    let raw = String(value || '').trim();
+    let negate = false;
+    if (allowNegation && raw.startsWith('!')) {
+        negate = true;
+        raw = raw.slice(1).trim();
+    }
+    const cleaned = raw.replace(/[^\w\s-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+    if (!cleaned) return null;
+    return (negate ? '!' : '') + cleaned;
+}
+
+function sanitizeChoiceImage(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    if (!/^\/(thumbnails|clips)\/[\w.-]+\.(jpg|jpeg|png|webp)$/i.test(raw)) return null;
+    return raw;
+}
+
+async function getProjectOrThrow(projectId) {
+    const safeProjectId = parseRequiredId(projectId, 'projectId');
+    const project = await db.get('SELECT * FROM projects WHERE id = ?', [safeProjectId]);
+    if (!project) throw createHttpError('Project not found', 404);
+    return project;
+}
+
+async function getSceneOrThrow(projectId, sceneId) {
+    const safeSceneId = parseUniqueId(sceneId, 'sceneId');
+    const clip = await db.get('SELECT * FROM clips WHERE unique_id = ? AND project_id = ?', [safeSceneId, projectId]);
+    if (!clip) throw createHttpError('Scene not found', 404);
+    return clip;
+}
+
+async function listAudioLibrary() {
+    try {
+        const files = await fs.readdir(path.join(__dirname, 'public/audio'));
+        return files
+            .filter(name => security.AUDIO_EXTENSIONS.has(path.extname(name).toLowerCase()))
+            .map(name => ({ name, path: `/audio/${name}` }));
+    } catch (_) {
+        return [];
+    }
+}
+
+app.get('/api/studio/:projectId', async (req, res) => {
     try {
         ensureDbReady();
-        const safeProjectId = parseRequiredId(projectId, 'projectId');
-        const project = await db.get('SELECT * FROM projects WHERE id = ?', [safeProjectId]);
-        if (!project) return res.status(404).json({ error: 'Project not found' });
-        const seq = Array.isArray(sequence) && sequence.length > 0
-            ? sequence.filter(item => item && item.id)
-            : (project.start_clip_id ? [{ id: project.start_clip_id, name: 'Start Clip', startTime: 0 }] : []);
-        if (seq.length === 0) return res.status(400).json({ error: 'Sequence is empty' });
-        const themeColor = normalizeThemeColor(project.theme_color || '#3b82f6');
-        const displayTitle = String(title || 'My Movie').trim() || 'My Movie';
-        const exportName = safeExportFolderName(displayTitle);
-        const exportPath = path.join(__dirname, 'public/exports', exportName);
-        await fs.emptyDir(exportPath);
-        await fs.ensureDir(path.join(exportPath, 'clips'));
-        await fs.ensureDir(path.join(exportPath, 'audio'));
-        await fs.ensureDir(path.join(exportPath, 'vendor'));
-
-        const localVuePath = path.join(__dirname, 'public', 'vendor', 'vue.global.prod.js');
-        if (!(await fs.pathExists(localVuePath))) {
-            throw createHttpError('Local Vue runtime is missing from public/vendor', 500);
-        }
-        await fs.copy(localVuePath, path.join(exportPath, 'vendor', 'vue.global.prod.js'));
-
-        const allClips = await db.all('SELECT * FROM clips WHERE project_id = ?', [safeProjectId]);
-        const allEdges = await db.all('SELECT * FROM edges WHERE project_id = ? ORDER BY trigger_time ASC', [safeProjectId]);
-        const clipIds = new Set(allClips.map(c => c.unique_id));
-        const missingSequence = seq.find(item => !clipIds.has(item.id));
-        if (missingSequence) return res.status(400).json({ error: `Sequence clip not found: ${missingSequence.id}` });
-        const reachableClipIds = collectReachableClipIds(seq, allEdges);
-        const clips = allClips.filter(clip => reachableClipIds.has(clip.unique_id));
-        const edges = allEdges.filter(edge => reachableClipIds.has(edge.from_id));
-        const missingChoiceTarget = edges.find(edge => {
-            const actionType = edge.action_type || 'target';
-            return actionType === 'target' && (!edge.to_id || !clipIds.has(edge.to_id));
-        });
-        if (missingChoiceTarget) {
-            return res.status(400).json({ error: `Choice target not found for edge ${missingChoiceTarget.id}` });
-        }
-
-        for (const clip of clips) {
-            const src = security.resolvePublicPath(path.join(__dirname, 'public'), clip.filepath); const filename = path.basename(clip.filepath); const dest = path.join(exportPath, 'clips', filename);
-            if(await fs.pathExists(src)) { await fs.copy(src, dest); clip.filepath = `clips/${filename}`; }
-            if(clip.thumbnail) { const thumbName = path.basename(clip.thumbnail); if(await fs.pathExists(security.resolvePublicPath(path.join(__dirname, 'public'), clip.thumbnail))) { await fs.copy(security.resolvePublicPath(path.join(__dirname, 'public'), clip.thumbnail), path.join(exportPath, 'clips', thumbName)); clip.thumbnail = `clips/${thumbName}`; } }
-            if(clip.bg_music) { const audSrc = security.resolvePublicPath(path.join(__dirname, 'public'), clip.bg_music); const audName = path.basename(clip.bg_music); if(await fs.pathExists(audSrc)) { await fs.copy(audSrc, path.join(exportPath, 'audio', audName)); clip.bg_music = `audio/${audName}`; } }
-            if(clip.subtitle_path) { const subSrc = security.resolvePublicPath(path.join(__dirname, 'public'), clip.subtitle_path); const subName = path.basename(clip.subtitle_path); if(await fs.pathExists(subSrc)) { await fs.copy(subSrc, path.join(exportPath, 'clips', subName)); clip.subtitle = `clips/${subName}`; } }
-        }
-
-        const logicBlocks = {};
-        edges.forEach(e => {
-            const blockKey = e.logic_id != null && String(e.logic_id).length > 0
-                ? e.logic_id
-                : ('legacy_' + e.from_id + '_' + e.trigger_time);
-            if (!logicBlocks[blockKey]) {
-                logicBlocks[blockKey] = { id: blockKey, from: e.from_id, time: e.trigger_time, timeLimit: e.time_limit || 0, shuffle: !!e.shuffle_choices, choices: [] };
-            }
-            logicBlocks[blockKey].choices.push({
-                to: e.to_id,
-                label: e.label,
-                color: e.text_color,
-                return: !!e.return_to_main,
-                action: e.action_type || 'target',
-                setVar: e.set_var,
-                reqVar: e.req_var,
-                isDefault: !!e.is_default
-            });
-        });
-
-        const safeTitle = escapeHtml(displayTitle);
-
-        const manifest = { name: displayTitle, short_name: displayTitle, start_url: "./index.html", display: "fullscreen", background_color: "#000", theme_color: themeColor, icons: [] };
-        await fs.writeFile(path.join(exportPath, 'manifest.json'), JSON.stringify(manifest));
-
-        const htmlContent = buildPublishedPlayerHtml({
-            safeTitle,
-            themeColor,
-            clips,
-            logicBlocks: Object.values(logicBlocks),
-            seq,
-            projectId: safeProjectId
-        });
-        await fs.writeFile(path.join(exportPath, 'index.html'), htmlContent);
-        const clipMap = new Map(clips.map(clip => [clip.unique_id, clip]));
-        const featuredClip = clipMap.get(seq[0].id) || clips[0] || null;
-        const sequenceDuration = seq.reduce((total, item) => total + toFiniteNumber(clipMap.get(item.id) && clipMap.get(item.id).duration, 0), 0);
-
-        await upsertPublishedMovie({
-            exportName,
-            projectId: safeProjectId,
-            title: displayTitle,
-            synopsis: project.synopsis,
-            genre: project.genre,
-            posterPath: featuredClip && featuredClip.thumbnail ? stripLeadingSlashes(featuredClip.thumbnail) : null,
-            themeColor,
-            clipCount: clips.length,
-            choiceCount: edges.length,
-            duration: sequenceDuration
-        });
-
+        const project = await getProjectOrThrow(req.params.projectId);
+        const [videos, clips, edges, published, analytics, audio] = await Promise.all([
+            db.all('SELECT * FROM videos WHERE project_id = ? ORDER BY id ASC', [project.id]),
+            db.all('SELECT * FROM clips WHERE project_id = ? ORDER BY id ASC', [project.id]),
+            db.all('SELECT * FROM edges WHERE project_id = ? ORDER BY trigger_time ASC, id ASC', [project.id]),
+            db.all('SELECT * FROM published_movies WHERE project_id = ? ORDER BY datetime(updated_at) DESC', [project.id]),
+            db.all('SELECT choice_label, target_clip_id, COUNT(*) AS count FROM analytics WHERE project_id = ? GROUP BY choice_label, target_clip_id ORDER BY count DESC', [project.id]),
+            listAudioLibrary()
+        ]);
         res.json({
             success: true,
-            url: `/exports/${exportName}/index.html`,
+            project,
+            videos,
+            clips,
+            edges,
+            audio,
+            published: published.filter(row => security.validateExportName(row.export_name)).map(formatFeedItem),
+            analytics,
             feedUrl: `${FEED_PUBLIC_ORIGIN}/`
         });
     } catch (err) {
         sendApiError(res, err);
+    }
+});
+
+app.post('/api/project/update', async (req, res) => {
+    try {
+        ensureDbReady();
+        const body = req.body || {};
+        const project = await getProjectOrThrow(body.id);
+        const title = Object.prototype.hasOwnProperty.call(body, 'title')
+            ? ensureName(body.title, 'Movie title is required').slice(0, 120)
+            : project.title;
+        const color = Object.prototype.hasOwnProperty.call(body, 'color')
+            ? normalizeThemeColor(body.color)
+            : (project.theme_color || '#3b82f6');
+        const genre = Object.prototype.hasOwnProperty.call(body, 'genre') ? normalizeProjectGenre(body.genre) : project.genre;
+        const synopsis = Object.prototype.hasOwnProperty.call(body, 'synopsis') ? normalizeProjectSynopsis(body.synopsis) : project.synopsis;
+        await db.run(
+            'UPDATE projects SET title = ?, theme_color = ?, genre = ?, synopsis = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [title, color, genre, synopsis, project.id]
+        );
+        res.json({ success: true, project: await db.get('SELECT * FROM projects WHERE id = ?', [project.id]) });
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
+// Partial update of a scene: name, what happens when it ends, audio, notes,
+// map position and visibility. Only the fields present in the body change.
+app.post('/api/scene/update', async (req, res) => {
+    try {
+        ensureDbReady();
+        const body = req.body || {};
+        const project = await getProjectOrThrow(body.projectId);
+        const clip = await getSceneOrThrow(project.id, body.id);
+        const has = key => Object.prototype.hasOwnProperty.call(body, key);
+        const updates = {};
+
+        if (has('name')) updates.name = ensureName(body.name, 'Scene name is required').slice(0, 120);
+        if (has('nextClipId')) {
+            const nextId = String(body.nextClipId || '').trim() || null;
+            if (nextId) {
+                if (nextId === clip.unique_id) throw createHttpError('A scene cannot continue into itself', 400);
+                const target = await db.get('SELECT unique_id FROM clips WHERE unique_id = ? AND project_id = ?', [nextId, project.id]);
+                if (!target) throw createHttpError('The scene to continue to was not found', 404);
+            }
+            updates.next_clip_id = nextId;
+        }
+        if (has('isEnding')) updates.is_ending = body.isEnding ? 1 : 0;
+        if (has('endingTitle')) updates.ending_title = String(body.endingTitle || '').replace(/\s+/g, ' ').trim().slice(0, 80) || null;
+        if (has('notes')) updates.notes = String(body.notes || '').slice(0, 1000);
+        if (has('muteAudio')) updates.mute_audio = body.muteAudio ? 1 : 0;
+        if (has('bgMusic')) {
+            const music = body.bgMusic ? String(body.bgMusic).trim() : null;
+            if (music) {
+                if (!music.startsWith('/audio/')) throw createHttpError('Music must be an uploaded audio file', 400);
+                const musicPath = security.resolvePublicPath(path.join(__dirname, 'public'), music);
+                if (!(await fs.pathExists(musicPath))) throw createHttpError('Audio file not found', 404);
+            }
+            updates.bg_music = music;
+        }
+        if (has('builderVisible')) updates.builder_visible = body.builderVisible ? 1 : 0;
+        if (has('x')) updates.x = toFiniteNumber(body.x, 0);
+        if (has('y')) updates.y = toFiniteNumber(body.y, 0);
+
+        const columns = Object.keys(updates);
+        if (columns.length) {
+            await db.run(
+                `UPDATE clips SET ${columns.map(column => `${column} = ?`).join(', ')} WHERE unique_id = ? AND project_id = ?`,
+                [...columns.map(column => updates[column]), clip.unique_id, project.id]
+            );
+        }
+        if (updates.builder_visible === 0) {
+            await db.run('UPDATE projects SET start_clip_id = NULL WHERE id = ? AND start_clip_id = ?', [project.id, clip.unique_id]);
+        }
+        res.json({ success: true, clip: await db.get('SELECT * FROM clips WHERE unique_id = ?', [clip.unique_id]) });
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
+// Replaces every choice point of one scene in a single transaction. The
+// studio sends the scene's whole decision setup each time it changes, which
+// keeps the editor simple and the database consistent.
+app.post('/api/scene/choices', async (req, res) => {
+    try {
+        ensureDbReady();
+        const body = req.body || {};
+        const project = await getProjectOrThrow(body.projectId);
+        const clip = await getSceneOrThrow(project.id, body.sceneId);
+        const projectClips = await db.all('SELECT unique_id FROM clips WHERE project_id = ?', [project.id]);
+        const clipIds = new Set(projectClips.map(row => row.unique_id));
+        const rawPoints = Array.isArray(body.points) ? body.points.slice(0, 12) : [];
+        const usedIds = new Set();
+        const points = rawPoints.map(point => {
+            const safe = point || {};
+            let id = String(safe.id || '').trim();
+            if (!/^[\w:.-]{1,100}$/.test(id) || usedIds.has(id)) id = `point_${uuidv4()}`;
+            usedIds.add(id);
+            const timeLimit = toFiniteNumber(safe.timeLimit, 0);
+            let defaultTaken = false;
+            const choices = (Array.isArray(safe.choices) ? safe.choices : []).slice(0, 8).map(choice => {
+                const item = choice || {};
+                const action = ['scene', 'end', 'next', 'dismiss'].includes(String(item.action || 'scene')) ? String(item.action || 'scene') : 'scene';
+                const target = action === 'scene' && clipIds.has(String(item.to || '')) ? String(item.to) : null;
+                const isDefault = !!item.isDefault && !defaultTaken;
+                if (isDefault) defaultTaken = true;
+                const color = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(String(item.color || '')) ? String(item.color) : '#ffffff';
+                return {
+                    label: String(item.label || '').replace(/\s+/g, ' ').trim().slice(0, 80),
+                    actionType: action === 'scene' ? 'target' : action,
+                    to: target,
+                    returnHere: action === 'scene' && !!item.returnHere && !!target ? 1 : 0,
+                    setFlag: sanitizeFlagName(item.setFlag),
+                    requireFlag: sanitizeFlagName(item.requireFlag, true),
+                    isDefault: isDefault ? 1 : 0,
+                    image: sanitizeChoiceImage(item.image),
+                    color
+                };
+            });
+            return {
+                id,
+                time: Math.max(0, Math.min(24 * 3600, toFiniteNumber(safe.time, 0))),
+                timeLimit: timeLimit > 0 ? Math.min(600, timeLimit) : null,
+                shuffle: safe.shuffle ? 1 : 0,
+                pause: safe.pause ? 1 : 0,
+                prompt: String(safe.prompt || '').replace(/\s+/g, ' ').trim().slice(0, 160) || null,
+                choices
+            };
+        });
+
+        await db.exec('BEGIN IMMEDIATE TRANSACTION');
+        try {
+            await db.run('DELETE FROM edges WHERE project_id = ? AND from_id = ?', [project.id, clip.unique_id]);
+            for (const point of points) {
+                for (const choice of point.choices) {
+                    await db.run(
+                        `INSERT INTO edges (project_id, from_id, to_id, label, text_color, trigger_time, logic_id, return_to_main, set_var, req_var, action_type, time_limit, is_default, shuffle_choices, pause_on_show, prompt, thumbnail)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [project.id, clip.unique_id, choice.to, choice.label, choice.color, point.time, point.id, choice.returnHere,
+                            choice.setFlag, choice.requireFlag, choice.actionType, point.timeLimit, choice.isDefault, point.shuffle, point.pause, point.prompt, choice.image]
+                    );
+                }
+            }
+            const targets = points.flatMap(point => point.choices.map(choice => choice.to)).filter(Boolean);
+            if (targets.length) {
+                const unique = Array.from(new Set(targets));
+                await db.run(
+                    `UPDATE clips SET builder_visible = 1 WHERE project_id = ? AND unique_id IN (${unique.map(() => '?').join(', ')})`,
+                    [project.id, ...unique]
+                );
+            }
+            await db.exec('COMMIT');
+        } catch (err) {
+            await db.exec('ROLLBACK');
+            throw err;
+        }
+        const edges = await db.all('SELECT * FROM edges WHERE project_id = ? AND from_id = ? ORDER BY trigger_time ASC, id ASC', [project.id, clip.unique_id]);
+        res.json({ success: true, edges });
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
+// Uses a whole uploaded video as one scene, instantly: the scene points at
+// the source file itself, so nothing is re-encoded.
+app.post('/api/scene/whole', async (req, res) => {
+    try {
+        ensureDbReady();
+        const body = req.body || {};
+        const project = await getProjectOrThrow(body.projectId);
+        const { video } = await getVideoOrThrow(body.videoId);
+        if (toFiniteNumber(video.project_id, 0) !== project.id) throw createHttpError('Video not found in this project', 404);
+        const fallbackName = String(video.filename || 'Scene').replace(/\.[a-z0-9]{2,4}$/i, '');
+        const name = String(body.name || '').trim().slice(0, 120) || fallbackName || 'Scene';
+        const clipId = uuidv4();
+        await db.run(
+            'INSERT INTO clips (unique_id, project_id, name, filepath, thumbnail, source_video_id, duration, start_time, end_time, x, y, builder_visible) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 1)',
+            [clipId, project.id, name, video.filepath, video.thumbnail, video.id, video.duration, video.duration,
+                toFiniteNumber(body.x, 150), toFiniteNumber(body.y, 150)]
+        );
+        res.json({ success: true, clip: await db.get('SELECT * FROM clips WHERE unique_id = ?', [clipId]) });
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
+// Re-cuts an existing scene from its source video with new in/out points,
+// keeping its id, so every choice and link pointing at it survives.
+app.post('/api/scene/retrim', async (req, res) => {
+    let outputPath = null;
+    try {
+        ensureDbReady();
+        const body = req.body || {};
+        const project = await getProjectOrThrow(body.projectId);
+        const clip = await getSceneOrThrow(project.id, body.id);
+        if (storyLib.isSourceClip(clip)) throw createHttpError('Source videos cannot be trimmed. Cut a scene from them instead.', 400);
+        if (!clip.source_video_id) throw createHttpError('This scene has no source video to re-cut from', 400);
+        const { video, sourcePath } = await getVideoOrThrow(clip.source_video_id);
+        if (toFiniteNumber(video.project_id, 0) !== project.id) throw createHttpError('Source video not found in this project', 404);
+        const { startTime, endTime } = validateClipWindow(body.start, body.end, video.duration);
+        if (endTime - startTime < 0.2) throw createHttpError('A scene must be at least 0.2 seconds long', 400);
+        const outputFilename = `clip_${uuidv4()}.mp4`;
+        outputPath = path.join(__dirname, 'public/clips', outputFilename);
+        const duration = await renderSceneFile(sourcePath, outputPath, { startTime, endTime });
+        const thumbnail = await generateThumbnail(outputPath, outputFilename);
+        await db.run(
+            'UPDATE clips SET filepath = ?, thumbnail = ?, duration = ?, start_time = ?, end_time = ? WHERE unique_id = ? AND project_id = ?',
+            [`/clips/${outputFilename}`, thumbnail, duration, startTime, endTime, clip.unique_id, project.id]
+        );
+        outputPath = null;
+        await removeUnusedPublicAssets([clip.filepath, clip.thumbnail]);
+        res.json({ success: true, clip: await db.get('SELECT * FROM clips WHERE unique_id = ?', [clip.unique_id]) });
+    } catch (err) {
+        if (outputPath) await fs.remove(outputPath).catch(() => {});
+        if (!(err && err.statusCode)) console.error(err);
+        sendApiError(res, err, 'Could not re-cut this scene');
+    }
+});
+
+// Finds shot changes in a source video with ffmpeg's scene detector, so the
+// cutter can suggest where scenes naturally begin and end.
+const sceneDetectCache = new Map();
+app.post('/api/video/detect-scenes', async (req, res) => {
+    try {
+        ensureDbReady();
+        const body = req.body || {};
+        const project = await getProjectOrThrow(body.projectId);
+        const { video, sourcePath } = await getVideoOrThrow(body.videoId);
+        if (toFiniteNumber(video.project_id, 0) !== project.id) throw createHttpError('Video not found in this project', 404);
+        const threshold = Math.max(0.1, Math.min(0.9, toFiniteNumber(body.threshold, 0.35)));
+        const cacheKey = `${video.id}:${video.filepath}:${threshold.toFixed(2)}`;
+        if (sceneDetectCache.has(cacheKey)) return res.json({ success: true, cuts: sceneDetectCache.get(cacheKey), cached: true });
+        const stderr = await new Promise((resolve, reject) => {
+            execFile(ffmpegStatic, [
+                '-hide_banner', '-nostats', '-i', sourcePath,
+                '-an', '-sn', '-dn',
+                '-vf', `scale=320:-2,select='gt(scene\\,${threshold.toFixed(2)})',showinfo`,
+                '-f', 'null', '-'
+            ], { maxBuffer: 64 * 1024 * 1024, timeout: 5 * 60 * 1000 }, (err, stdout, errOut) => {
+                if (err && !errOut) return reject(err);
+                resolve(String(errOut || ''));
+            });
+        });
+        const duration = toFiniteNumber(video.duration, 0);
+        const cuts = [];
+        const pattern = /pts_time:([0-9]+(?:\.[0-9]+)?)/g;
+        let match;
+        while ((match = pattern.exec(stderr))) {
+            const time = Number(match[1]);
+            if (!Number.isFinite(time) || time < 0.5) continue;
+            if (duration > 0 && time > duration - 0.5) continue;
+            if (cuts.length && time - cuts[cuts.length - 1] < 1) continue;
+            cuts.push(Math.round(time * 100) / 100);
+            if (cuts.length >= 400) break;
+        }
+        sceneDetectCache.set(cacheKey, cuts);
+        if (sceneDetectCache.size > 200) sceneDetectCache.delete(sceneDetectCache.keys().next().value);
+        res.json({ success: true, cuts });
+    } catch (err) {
+        if (!(err && err.statusCode)) console.error(err);
+        sendApiError(res, err, 'Could not analyse this video');
+    }
+});
+
+function toWebPath(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return raw;
+    return `/${stripLeadingSlashes(raw)}`;
+}
+
+// Live preview: the exact player that gets published, playing the project's
+// current state straight from the studio's media library.
+app.get('/preview/:projectId', async (req, res) => {
+    try {
+        ensureDbReady();
+        const project = await getProjectOrThrow(req.params.projectId);
+        const clips = await db.all('SELECT * FROM clips WHERE project_id = ?', [project.id]);
+        const edges = await db.all('SELECT * FROM edges WHERE project_id = ?', [project.id]);
+        const story = storyLib.buildStory({ project, clips, edges, mapAsset: toWebPath });
+        const requestedStart = String(req.query.scene || '').trim();
+        const html = buildPlayerPageHtml({
+            story,
+            assetBase: '/player/',
+            mode: 'preview',
+            storageKey: `project_${project.id}`,
+            startSceneId: story.scenes.some(scene => scene.id === requestedStart) ? requestedStart : '',
+            manifest: false
+        });
+        res.setHeader('Cache-Control', 'no-store');
+        res.type('html').send(html);
+    } catch (err) {
+        const status = (err && err.statusCode) || 500;
+        res.status(status).type('text').send(status === 404 ? 'Project not found' : 'Preview unavailable');
+    }
+});
+
+// Downloads a published movie folder as a .zip, ready to upload anywhere.
+app.get('/api/exports/:name/zip', async (req, res) => {
+    try {
+        const name = String(req.params.name || '');
+        if (!security.validateExportName(name)) return res.status(400).json({ error: 'Invalid export name' });
+        const dir = path.join(__dirname, 'public', 'exports', name);
+        if (!(await fs.pathExists(path.join(dir, 'index.html')))) return res.status(404).json({ error: 'Published movie not found' });
+        const files = (await listFiles(dir)).map(file => ({ name: `${name}/${file.name}`, path: file.path }));
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${name}.zip"`);
+        res.setHeader('Cache-Control', 'no-store');
+        await writeZip(files, res);
+        res.end();
+    } catch (err) {
+        console.error(err);
+        if (!res.headersSent) sendApiError(res, err, 'Could not build the zip');
+        else res.destroy(err);
+    }
+});
+
+// --- PUBLISH ENGINE ---
+// Builds a self-contained folder: index.html + story.json + player/ + the
+// media of every scene a viewer can reach from the start scene.
+app.post('/api/publish', async (req, res) => {
+    const { projectId, title, sequence } = req.body || {};
+    try {
+        ensureDbReady();
+        const project = await getProjectOrThrow(projectId);
+        const allClips = await db.all('SELECT * FROM clips WHERE project_id = ?', [project.id]);
+        const allEdges = await db.all('SELECT * FROM edges WHERE project_id = ?', [project.id]);
+        const clipIds = new Set(allClips.map(clip => clip.unique_id));
+        // `sequence` is the classic editor's main storyline; the new studio
+        // simply publishes from the start scene.
+        const playlist = Array.isArray(sequence)
+            ? sequence.map(item => String(item && typeof item === 'object' ? item.id : item || '')).filter(id => clipIds.has(id))
+            : [];
+        if (!project.start_clip_id && !playlist.length) {
+            return res.status(400).json({ error: 'Choose a start scene before publishing.' });
+        }
+        if (project.start_clip_id && !clipIds.has(project.start_clip_id) && !playlist.length) {
+            return res.status(400).json({ error: 'The start scene no longer exists. Choose a new one.' });
+        }
+
+        const displayTitle = String(title || project.title || 'My Movie').replace(/\s+/g, ' ').trim().slice(0, 120) || 'My Movie';
+        let exportName = safeExportFolderName(displayTitle);
+        const existing = await db.get('SELECT project_id FROM published_movies WHERE export_name = ?', [exportName]);
+        if (existing && existing.project_id && Number(existing.project_id) !== project.id) {
+            exportName = `${exportName}_${project.id}`;
+        }
+        const exportPath = path.join(__dirname, 'public/exports', exportName);
+        const fullStory = storyLib.buildStory({ project: { ...project, title: displayTitle }, clips: allClips, edges: allEdges, playlist, mapAsset: toWebPath, analyticsProjectId: project.id });
+        const story = storyLib.reachableOnly(fullStory);
+        if (!story.scenes.length) return res.status(400).json({ error: 'There is nothing to publish yet.' });
+
+        await fs.emptyDir(exportPath);
+        await fs.ensureDir(path.join(exportPath, 'clips'));
+        await fs.ensureDir(path.join(exportPath, 'audio'));
+        await fs.ensureDir(path.join(exportPath, 'player'));
+        for (const file of PLAYER_ASSET_FILES) {
+            await fs.copy(path.join(__dirname, 'public', 'player', file), path.join(exportPath, 'player', file));
+        }
+
+        const publicRoot = path.join(__dirname, 'public');
+        const copied = new Map();
+        const missing = [];
+        const usedNames = new Set();
+        const copyAsset = (webPath, kind) => {
+            const key = String(webPath || '');
+            if (!key) return key;
+            if (copied.has(key)) return copied.get(key);
+            const folder = kind === 'audio' ? 'audio' : 'clips';
+            let fileName = path.basename(key);
+            while (usedNames.has(`${folder}/${fileName}`)) fileName = `${uuidv4().slice(0, 8)}_${path.basename(key)}`;
+            usedNames.add(`${folder}/${fileName}`);
+            const relative = `${folder}/${fileName}`;
+            copied.set(key, { relative, source: key, kind });
+            return copied.get(key);
+        };
+        // First pass: decide every destination; second pass: copy.
+        const plannedStory = storyLib.mapStoryAssets(story, (webPath, kind) => copyAsset(webPath, kind).relative);
+        for (const entry of copied.values()) {
+            let src;
+            try {
+                src = security.resolvePublicPath(publicRoot, entry.source);
+            } catch (_) {
+                missing.push(entry.source);
+                continue;
+            }
+            if (await fs.pathExists(src)) {
+                await fs.copy(src, path.join(exportPath, entry.relative));
+            } else {
+                missing.push(entry.source);
+            }
+        }
+
+        const startScene = plannedStory.scenes.find(scene => scene.id === plannedStory.startSceneId) || plannedStory.scenes[0];
+        const posterPath = startScene && startScene.poster ? startScene.poster : null;
+        const html = buildPlayerPageHtml({
+            story: plannedStory,
+            assetBase: 'player/',
+            mode: 'published',
+            storageKey: exportName,
+            analytics: true,
+            posterUrl: posterPath || ''
+        });
+        await fs.writeFile(path.join(exportPath, 'index.html'), html);
+        await fs.writeJson(path.join(exportPath, 'story.json'), plannedStory, { spaces: 2 });
+        const themeColor = normalizeThemeColor(project.theme_color || '#3b82f6');
+        await fs.writeJson(path.join(exportPath, 'manifest.json'), {
+            name: displayTitle,
+            short_name: displayTitle.slice(0, 24),
+            start_url: './index.html',
+            display: 'fullscreen',
+            background_color: '#000000',
+            theme_color: themeColor,
+            icons: []
+        });
+
+        const analysis = storyCore.analyzeStory(plannedStory);
+        const totalDuration = plannedStory.scenes.reduce((sum, scene) => sum + toFiniteNumber(scene.duration, 0), 0);
+        await upsertPublishedMovie({
+            exportName,
+            projectId: project.id,
+            title: displayTitle,
+            synopsis: project.synopsis,
+            genre: project.genre,
+            posterPath: posterPath && security.validatePosterPath(posterPath) ? posterPath : null,
+            themeColor,
+            clipCount: plannedStory.scenes.length,
+            choiceCount: analysis.stats.choices,
+            duration: totalDuration
+        });
+
+        res.json({
+            success: true,
+            exportName,
+            url: `/exports/${exportName}/index.html`,
+            absoluteUrl: buildStudioUrl(`exports/${exportName}/index.html`),
+            zipUrl: `/api/exports/${exportName}/zip`,
+            feedUrl: `${FEED_PUBLIC_ORIGIN}/`,
+            stats: analysis.stats,
+            issues: analysis.issues.filter(issue => issue.level !== 'info'),
+            missingMedia: missing
+        });
+    } catch (err) {
+        if (!(err && err.statusCode)) console.error(err);
+        sendApiError(res, err, 'Publishing failed');
     }
 });
 
