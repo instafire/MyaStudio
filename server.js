@@ -1309,9 +1309,9 @@ app.get('/api/project/health/:id', async (req, res) => {
 
 app.post('/api/projects', async (req, res) => {
     try {
-        const title = ensureName(req.body && req.body.title, 'Project title is required');
-        await db.run('INSERT INTO projects (title) VALUES (?)', [title]);
-        res.json({ success: true });
+        const title = ensureName(req.body && req.body.title, 'Project title is required').slice(0, 120);
+        const result = await db.run('INSERT INTO projects (title, updated_at) VALUES (?, CURRENT_TIMESTAMP)', [title]);
+        res.json({ success: true, projectId: result.lastID });
     } catch (err) {
         sendApiError(res, err, 'Could not create project');
     }

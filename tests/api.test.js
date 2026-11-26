@@ -144,8 +144,11 @@ test('sample story: studio data, scene settings, preview, publish and zip', { ti
 test('uploaded video: cut, re-trim, whole-video scene and shot detection', { timeout: 120000 }, async () => {
     const created = await api('POST', '/api/projects', { title: `Upload ${port}` });
     assert.equal(created.status, 200);
+    assert.ok(Number.isInteger(created.data.projectId), 'creating a movie returns its id');
     const projects = await api('GET', '/api/projects');
-    const project = projects.data.find(item => item.title === `Upload ${port}`);
+    const project = projects.data.find(item => item.id === created.data.projectId);
+    assert.equal(project.title, `Upload ${port}`);
+    assert.equal(project.scene_count, 0);
     createdProjects.add(project.id);
 
     const clipPath = path.join(tmpDir, 'two-shots.mp4');
