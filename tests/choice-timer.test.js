@@ -42,6 +42,12 @@ test('the player shows a countdown bar and picks the default when time runs out'
     assert.match(playerCss, /\.mp-timer-fill/);
 });
 
+test('the countdown shows the seconds left as visible text, not just a bar', () => {
+    assert.match(playerSource, /class: 'mp-timer-text'/);
+    assert.match(playerSource, /timerText\.textContent = Math\.ceil\(left\) \+ 's left'/);
+    assert.match(playerCss, /\.mp-timer-text/);
+});
+
 test('shuffled choice points reorder their choices', () => {
     const engine = Story.createEngine(timedStory(), { random: () => 0 });
     engine.start();

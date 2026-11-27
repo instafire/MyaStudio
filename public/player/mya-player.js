@@ -133,8 +133,9 @@
         const promptEl = h('p', { class: 'mp-prompt' });
         const timerFill = h('span', { class: 'mp-timer-fill' });
         const timerEl = h('div', { class: 'mp-timer', hidden: true, role: 'timer' }, [timerFill]);
+        const timerText = h('span', { class: 'mp-timer-text', hidden: true, text: '' });
         const choiceList = h('div', { class: 'mp-choice-list', role: 'group', 'aria-label': 'Choices' });
-        const choicesEl = h('div', { class: 'mp-choices', 'aria-hidden': 'true' }, [promptEl, timerEl, choiceList]);
+        const choicesEl = h('div', { class: 'mp-choices', 'aria-hidden': 'true' }, [promptEl, timerEl, timerText, choiceList]);
 
         const progressBuffer = h('span', { class: 'mp-progress-buffer' });
         const progressFill = h('span', { class: 'mp-progress-fill' });
@@ -580,19 +581,36 @@
             if (!choices || !choices.length) return;
             if (choice && choice.point.id === point.id) return;
             closeChoices();
-            const hasImages = choices.some(item => item.image);
+            // A choice with no artwork of its own falls back to its target
+            // scene's poster, and the card class is per-button, not global:
+            // the old code gave EVERY button the card class when ANY choice
+            // had an image, so imageless choices rendered as empty black
+            // tiles (Two Doors demo: "Open the red door" was black while
+            // "Enter the garden" showed its colour bars). A broken image
+            // file degrades to a plain text button instead of a black tile.
+            const scenePoster = id => {
+                const scene = (story.scenes || []).find(item => item.id === id);
+                return scene ? scene.poster : null;
+            };
+            const choiceImage = item => item.image || (item.action === 'scene' ? scenePoster(item.to) : null);
+            const hasImages = choices.some(item => choiceImage(item));
             choiceList.innerHTML = '';
             choiceList.style.setProperty('--mp-count', String(choices.length <= 4 ? choices.length : Math.ceil(choices.length / 2)));
             const buttons = choices.map((item, index) => {
                 const visited = !!engine.state.visitedChoices[item.id];
+                const image = choiceImage(item);
                 const button = h('button', {
-                    class: 'mp-choice' + (hasImages ? ' mp-choice-card' : '') + (item.isDefault && point.timeLimit > 0 ? ' is-default' : ''),
+                    class: 'mp-choice' + (image ? ' mp-choice-card' : '') + (item.isDefault && point.timeLimit > 0 ? ' is-default' : ''),
                     type: 'button',
                     'aria-label': (item.label || 'Choice') + (visited ? ' (already watched)' : '')
                 }, [
                     choices.length > 1 && !hasImages ? h('span', { class: 'mp-choice-key', 'aria-hidden': 'true', text: String(index + 1) }) : null,
                     visited ? h('span', { class: 'mp-choice-visited', 'aria-hidden': 'true', text: '✓ Seen' }) : null,
-                    hasImages && item.image ? h('img', { src: item.image, alt: '' }) : null,
+                    image ? h('img', { src: image, alt: '', on: { error: event => {
+                        const failed = event.currentTarget;
+                        if (failed) failed.remove();
+                        button.classList.remove('mp-choice-card');
+                    } } }) : null,
                     h('span', { class: 'mp-choice-label', text: item.label || 'Continue' })
                 ]);
                 button.addEventListener('click', () => pick(item, false));
@@ -602,6 +620,8 @@
             promptEl.textContent = point.prompt || '';
             const limit = Number(point.timeLimit) || 0;
             timerEl.hidden = !(limit > 0);
+            timerText.hidden = !(limit > 0);
+            timerText.textContent = limit > 0 ? Math.ceil(limit) + 's left' : '';
             timerFill.style.transform = 'scaleX(1)';
             choice = { point, choices, buttons, limit, elapsed: 0, last: performance.now(), chosen: false, holding: false };
             if (point.pause && activeVideo && !activeVideo.paused) activeVideo.pause();
@@ -624,6 +644,7 @@
             const left = Math.max(0, choice.limit - choice.elapsed);
             timerFill.style.transform = 'scaleX(' + (left / choice.limit).toFixed(4) + ')';
             timerEl.setAttribute('aria-label', Math.ceil(left) + ' seconds left to choose');
+            timerText.textContent = Math.ceil(left) + 's left';
             if (left <= 0) pick(engine.defaultChoice(choice.point, choice.choices), true);
         }
 

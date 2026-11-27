@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('node:crypto');
 const sqlite3 = require('sqlite3').verbose();
 const { open } = require('sqlite');
 const fs = require('fs-extra');
@@ -69,12 +70,31 @@ const DEFAULT_AI_SETTINGS = {
     provider: 'ollama',
     model: 'llama3.2:3b',
     apiKey: '',
-    ollamaHost: 'http://127.0.0.1:11434'
+    ollamaHost: 'http://127.0.0.1:11434',
+    // Base URL for the OpenAI-compatible chat completions endpoint. The
+    // default keeps the old behaviour (api.openai.com); point it at any
+    // OpenAI-compatible server (local gateway, another provider) instead.
+    openaiBaseUrl: 'https://api.openai.com/v1'
 };
+
+// A base URL is only usable as http(s). Strict mode (saving settings)
+// rejects anything else so a typo fails loudly; lenient mode (reading a
+// hand-edited file) falls back to the default instead.
+function normalizeAiBaseUrl(value, strict = false) {
+    const raw = String(value || '').trim().replace(/\/+$/, '');
+    if (!raw) return DEFAULT_AI_SETTINGS.openaiBaseUrl;
+    let parsed;
+    try { parsed = new URL(raw); } catch (_) { parsed = null; }
+    if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
+        if (strict) throw createHttpError('openaiBaseUrl must be an http(s) URL', 400);
+        return DEFAULT_AI_SETTINGS.openaiBaseUrl;
+    }
+    return raw;
+}
 
 app.use(security.securityHeaders);
 app.use(cors({ origin: security.corsOriginChecker(TRUSTED_ORIGINS) }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // default is 100KB — large project JSON imports failed while 800MB uploads succeeded
 app.use((req, res, next) => {
     if (req.path === '/' || req.path === '/index.html') {
         res.setHeader('Cache-Control', 'no-store');
@@ -91,7 +111,7 @@ app.get('/interactive-video-maker', (req, res) => {
 
 feedApp.use(security.securityHeaders);
 feedApp.use(cors({ origin: security.corsOriginChecker(TRUSTED_ORIGINS) }));
-feedApp.use(express.json());
+feedApp.use(express.json({ limit: '10mb' }));
 feedApp.use((req, res, next) => {
     if (req.path === '/' || req.path === '/index.html') {
         res.setHeader('Cache-Control', 'no-store');
@@ -99,6 +119,10 @@ feedApp.use((req, res, next) => {
     next();
 });
 feedApp.use(express.static(path.join(__dirname, 'public', 'feed')));
+// Published exports are self-contained public folders. The feed page rewrites
+// loopback player/poster URLs to the feed's own origin, so the feed app must
+// serve them too — otherwise every player iframe 404s ("Cannot GET /exports/...").
+feedApp.use('/exports', express.static(path.join(__dirname, 'public', 'exports')));
 
 // 1. SETUP FOLDERS
 const folders = ['videos', 'clips', 'thumbnails', 'exports', 'audio', 'gifs', 'subtitles'];
@@ -115,7 +139,7 @@ let db;
     await db.exec(`CREATE TABLE IF NOT EXISTS videos (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER, filename TEXT, filepath TEXT, thumbnail TEXT, duration REAL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);`);
     
     // Clips Table
-    await db.exec(`CREATE TABLE IF NOT EXISTS clips (id INTEGER PRIMARY KEY AUTOINCREMENT, unique_id TEXT UNIQUE, project_id INTEGER, name TEXT, filepath TEXT, thumbnail TEXT, source_video_id INTEGER, duration REAL, start_time REAL DEFAULT 0, end_time REAL, logic_name TEXT, timeout_to_id TEXT, timeout_seconds REAL, bg_music TEXT, bg_music_url TEXT, mute_audio INTEGER DEFAULT 0, is_event_clip INTEGER DEFAULT 0, x REAL DEFAULT 0, y REAL DEFAULT 0, builder_visible INTEGER DEFAULT 0);`);
+    await db.exec(`CREATE TABLE IF NOT EXISTS clips (id INTEGER PRIMARY KEY AUTOINCREMENT, unique_id TEXT UNIQUE, project_id INTEGER, name TEXT, filepath TEXT, thumbnail TEXT, source_video_id INTEGER, duration REAL, start_time REAL DEFAULT 0, end_time REAL, timeout_to_id TEXT, timeout_seconds REAL, bg_music TEXT, mute_audio INTEGER DEFAULT 0, is_event_clip INTEGER DEFAULT 0, x REAL DEFAULT 0, y REAL DEFAULT 0, builder_visible INTEGER DEFAULT 0);`);
     
     // Edges (Logic) Table
     await db.exec(`CREATE TABLE IF NOT EXISTS edges (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER, from_id TEXT, to_id TEXT, label TEXT, text_color TEXT DEFAULT '#ffffff', trigger_time REAL, logic_id TEXT, return_to_main INTEGER DEFAULT 0, set_var TEXT, req_var TEXT, action_type TEXT DEFAULT 'target');`);
@@ -145,6 +169,13 @@ let db;
         `ALTER TABLE projects ADD COLUMN updated_at DATETIME`
     ];
     for(let m of migrations) { try { await db.exec(m); } catch(e){} }
+    // Dead columns, removed Nov 27, 2026: clips.logic_name and
+    // clips.bg_music_url were never read or written by any route. Existing
+    // databases drop them here (best effort — old SQLite without DROP
+    // COLUMN support, or a DB that never had them, just skips).
+    for (const column of ['logic_name', 'bg_music_url']) {
+        try { await db.exec(`ALTER TABLE clips DROP COLUMN ${column}`); } catch (e) {}
+    }
     await reconcileMediaRecords();
     await reconcilePublishedMovies();
     
@@ -208,7 +239,7 @@ async function sweepStaleChunkUploads(maxAgeMs = 24 * 3600 * 1000) {
         await fs.ensureDir(CHUNK_UPLOAD_DIR);
         const now = Date.now();
         for (const name of await fs.readdir(CHUNK_UPLOAD_DIR)) {
-            if (!name.endsWith('.part')) continue;
+            if (!name.endsWith('.part') && !name.endsWith('.meta.json')) continue;
             const p = path.join(CHUNK_UPLOAD_DIR, name);
             try {
                 const st = await fs.stat(p);
@@ -316,6 +347,18 @@ async function probeDuration(filePath) {
     });
 }
 
+// True when the file has at least one audio stream. A failed probe means
+// "no audio" (the crossfade path degrades to video-only rather than failing).
+async function probeHasAudio(filePath) {
+    return new Promise((resolve) => {
+        ffmpeg.ffprobe(filePath, (err, metadata) => {
+            if (err) return resolve(false);
+            const streams = (metadata && metadata.streams) || [];
+            resolve(streams.some(stream => stream.codec_type === 'audio'));
+        });
+    });
+}
+
 async function getVideoOrThrow(sourceId) {
     if (!sourceId) throw createHttpError('sourceId is required', 400);
     const video = await db.get('SELECT * FROM videos WHERE id = ?', [sourceId]);
@@ -395,7 +438,9 @@ function sendApiError(res, err, fallback = 'Server error') {
     // Unexpected (5xx) errors are sanitized: the caller sees a generic
     // message while the detail stays in the server log. Client (4xx)
     // errors keep their message — they are intentional and safe to show.
-    const message = statusCode >= 500 ? fallback : (err && err.message ? err.message : fallback);
+    // Errors flagged safeToShow keep theirs too: their detail was already
+    // sanitized at the source (e.g. ffmpeg failures, below).
+    const message = (statusCode >= 500 && !(err && err.safeToShow)) ? fallback : (err && err.message ? err.message : fallback);
     res.status(statusCode).json({ error: message });
 }
 
@@ -428,9 +473,38 @@ function normalizeVolume(volume) {
 const EVEN_DIMENSIONS_FILTER = 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
 const WEB_VIDEO_OUTPUT_OPTIONS = ['-preset veryfast', '-crf 23', '-pix_fmt yuv420p', '-movflags +faststart'];
 
+// The tail of an ffmpeg run, scrubbed for the UI: no ANSI colours, no
+// local paths, last few lines only (they carry the cause), capped length.
+function sanitizeFfmpegDetail(text) {
+    const escapedRoot = __dirname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const clean = String(text || '')
+        .replace(/\x1b\[[0-9;]*m/g, '')
+        .replace(new RegExp(escapedRoot, 'g'), '[app]')
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .slice(-8)
+        .join(' ');
+    return clean.slice(0, 500);
+}
+
 function runFfmpeg(command) {
     return new Promise((resolve, reject) => {
-        command.on('end', resolve).on('error', reject).run();
+        let stderr = '';
+        command.on('stderr', line => {
+            stderr += String(line) + '\n';
+            if (stderr.length > 20000) stderr = stderr.slice(-20000);
+        });
+        command.on('end', resolve).on('error', err => {
+            // fluent-ffmpeg rejects with a bare "Error: ffmpeg exited with
+            // code 1" and no detail; the UI used to show only the generic
+            // API fallback. Surface the real (sanitized) cause instead.
+            const detail = sanitizeFfmpegDetail(stderr) || String((err && err.message) || '').slice(0, 500);
+            const shown = new Error(detail ? `ffmpeg failed: ${detail}` : 'ffmpeg failed');
+            shown.safeToShow = true;
+            shown.statusCode = (err && (err.statusCode || err.status)) || 500;
+            reject(shown);
+        }).run();
     });
 }
 
@@ -496,7 +570,8 @@ async function writeAiSettings(settings) {
         provider: String(settings.provider || DEFAULT_AI_SETTINGS.provider).trim() || DEFAULT_AI_SETTINGS.provider,
         model: String(settings.model || DEFAULT_AI_SETTINGS.model).trim() || DEFAULT_AI_SETTINGS.model,
         apiKey: String(settings.apiKey || '').trim(),
-        ollamaHost: String(settings.ollamaHost || DEFAULT_AI_SETTINGS.ollamaHost).trim() || DEFAULT_AI_SETTINGS.ollamaHost
+        ollamaHost: String(settings.ollamaHost || DEFAULT_AI_SETTINGS.ollamaHost).trim() || DEFAULT_AI_SETTINGS.ollamaHost,
+        openaiBaseUrl: normalizeAiBaseUrl(settings.openaiBaseUrl, true)
     };
     await fs.writeJson(AI_SETTINGS_PATH, next, { spaces: 2 });
     return next;
@@ -529,7 +604,8 @@ async function callAiChat(settings, prompt, systemPrompt = 'You are a helpful in
 
     if (provider === 'openai' || provider === 'openai-compatible') {
         if (!settings.apiKey) throw createHttpError('API key required for this provider', 400);
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        const baseUrl = normalizeAiBaseUrl(settings.openaiBaseUrl);
+        const response = await fetch(`${baseUrl}/chat/completions`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -546,7 +622,7 @@ async function callAiChat(settings, prompt, systemPrompt = 'You are a helpful in
         });
         if (!response.ok) {
             const text = await response.text().catch(() => '');
-            throw createHttpError(`OpenAI request failed (${response.status}): ${text.slice(0, 200)}`, 502);
+            throw createHttpError(`${provider === 'openai-compatible' ? 'OpenAI-compatible' : 'OpenAI'} request failed (${response.status}): ${text.slice(0, 200)}`, 502);
         }
         const data = await response.json();
         return data && data.choices && data.choices[0] && data.choices[0].message
@@ -571,35 +647,6 @@ function extractJsonBlock(text) {
         try { return JSON.parse(raw.slice(start, end + 1)); } catch (_) {}
     }
     return null;
-}
-
-function buildFallbackOutline({ premise, genre, targetScenes, tone }) {
-    const count = Math.max(2, Math.min(12, Number(targetScenes) || 5));
-    const scenes = [];
-    for (let i = 1; i <= count; i++) {
-        scenes.push({
-            id: i,
-            title: i === 1 ? 'Opening' : (i === count ? 'Finale' : `Scene ${i}`),
-            description: i === 1
-                ? `Introduce the premise: ${premise}`
-                : (i === count
-                    ? `Resolve the ${genre || 'story'} with a ${tone || 'neutral'} ending.`
-                    : `Develop the ${genre || 'story'} through a choice that branches the path.`),
-            choices: i === count
-                ? []
-                : [
-                    { label: 'Take the bold path', goesTo: i + 1 },
-                    { label: 'Take the careful path', goesTo: Math.min(count, i + 1) }
-                ]
-        });
-    }
-    return {
-        title: String(premise || 'Untitled Story').slice(0, 64),
-        genre: genre || 'Interactive story',
-        tone: tone || 'neutral',
-        premise,
-        scenes
-    };
 }
 
 async function getMovieAgentContext(projectId) {
@@ -856,7 +903,15 @@ function formatFeedItem(row) {
 
 async function listPublishedMovies() {
     const rows = await db.all('SELECT * FROM published_movies ORDER BY datetime(updated_at) DESC, id DESC');
-    return rows.filter(row => security.validateExportName(row.export_name)).map(formatFeedItem);
+    const visible = [];
+    for (const row of rows) {
+        if (!security.validateExportName(row.export_name)) continue;
+        // A kept row whose folder is gone stays out of the feed (it may be
+        // republished later) instead of linking viewers at a dead export.
+        if (!(await fs.pathExists(path.join(__dirname, 'public', 'exports', row.export_name, 'index.html')))) continue;
+        visible.push(row);
+    }
+    return visible.map(formatFeedItem);
 }
 
 async function upsertPublishedMovie(entry) {
@@ -940,6 +995,13 @@ async function cleanupClipReferences(uniqueId) {
     await db.run('UPDATE projects SET start_clip_id = NULL WHERE start_clip_id = ?', [uniqueId]);
 }
 
+// Startup reconciliation is NON-DESTRUCTIVE by design (fixed Nov 27, 2026):
+// rows are never deleted on boot. A clip/video whose file is gone from disk
+// keeps its row (delete or relink it in the studio); a published row whose
+// export folder is gone is kept too and simply hidden from the feed until
+// the folder comes back. The last report is served at GET /api/reconciliation.
+let lastReconciliation = { checkedAt: null, missingClips: [], missingVideos: [], missingPublished: [] };
+
 async function reconcileMediaRecords() {
     const clips = await db.all('SELECT unique_id, filepath, thumbnail, bg_music FROM clips');
     const videos = await db.all('SELECT id, filepath, thumbnail FROM videos');
@@ -977,6 +1039,14 @@ async function reconcileMediaRecords() {
         }
     }
 
+    // The report is recorded even on a clean boot, so checkedAt always
+    // says when reconciliation last ran.
+    lastReconciliation = {
+        checkedAt: new Date().toISOString(),
+        missingClips: missingClipFiles.map(clip => clip.unique_id),
+        missingVideos: missingVideoFiles.map(video => video.id),
+        missingPublished: lastReconciliation.missingPublished || []
+    };
     if (
         missingClipFiles.length === 0 &&
         missingClipThumbs.length === 0 &&
@@ -987,8 +1057,19 @@ async function reconcileMediaRecords() {
         return;
     }
 
-    const clipAssetPaths = missingClipFiles.flatMap(clip => [clip.filepath, clip.thumbnail, clip.bg_music]);
-    const videoAssetPaths = missingVideoFiles.flatMap(video => [video.filepath, video.thumbnail]);
+    // Non-destructive: only dangling thumbnail/audio pointers are nulled
+    // (housekeeping on pointers, not on user data). Rows whose media file
+    // is missing are KEPT — deleting them on boot silently destroyed work
+    // whenever a disk path moved or a mount was briefly absent. They are
+    // reported in the log and at GET /api/reconciliation instead.
+    if (missingClipFiles.length || missingVideoFiles.length) {
+        console.warn(
+            `[reconcile] ${missingClipFiles.length} clip(s) and ${missingVideoFiles.length} video(s) ` +
+            'reference files missing from disk; rows kept, see GET /api/reconciliation: ' +
+            `clips=${lastReconciliation.missingClips.join(',') || 'none'} ` +
+            `videos=${lastReconciliation.missingVideos.join(',') || 'none'}`
+        );
+    }
 
     await db.exec('BEGIN IMMEDIATE TRANSACTION');
     try {
@@ -998,24 +1079,14 @@ async function reconcileMediaRecords() {
         for (const uniqueId of missingClipAudio) {
             await db.run('UPDATE clips SET bg_music = NULL WHERE unique_id = ?', [uniqueId]);
         }
-        for (const clip of missingClipFiles) {
-            await db.run('DELETE FROM clips WHERE unique_id = ?', [clip.unique_id]);
-            await cleanupClipReferences(clip.unique_id);
-        }
         for (const id of missingVideoThumbs) {
             await db.run('UPDATE videos SET thumbnail = NULL WHERE id = ?', [id]);
-        }
-        for (const video of missingVideoFiles) {
-            await db.run('UPDATE clips SET source_video_id = NULL WHERE source_video_id = ?', [video.id]);
-            await db.run('DELETE FROM videos WHERE id = ?', [video.id]);
         }
         await db.exec('COMMIT');
     } catch (err) {
         await db.exec('ROLLBACK');
         throw err;
     }
-
-    await removeUnusedPublicAssets([...clipAssetPaths, ...videoAssetPaths]);
 }
 
 async function buildFallbackPublishedMovie(exportName) {
@@ -1065,10 +1136,18 @@ async function reconcilePublishedMovies() {
     const existingRows = await db.all('SELECT * FROM published_movies');
     const existingMap = new Map(existingRows.map(row => [row.export_name, row]));
 
-    for (const row of existingRows) {
-        if (!validExportSet.has(row.export_name)) {
-            await db.run('DELETE FROM published_movies WHERE export_name = ?', [row.export_name]);
-        }
+    // Non-destructive: rows whose export folder is gone are KEPT, never
+    // deleted — the folder may come back (a republish, a restored backup).
+    // listPublishedMovies() hides them from the feed until then.
+    const missingPublished = existingRows
+        .filter(row => !validExportSet.has(row.export_name))
+        .map(row => row.export_name);
+    lastReconciliation = { ...lastReconciliation, missingPublished };
+    if (missingPublished.length) {
+        console.warn(
+            `[reconcile] ${missingPublished.length} published movie(s) whose export folder is missing; rows kept: ` +
+            missingPublished.join(',')
+        );
     }
 
     for (const exportName of validExports) {
@@ -1595,6 +1674,13 @@ app.post('/api/analytics/reset', async (req, res) => {
     }
 });
 
+// What the last startup reconciliation found: rows kept despite missing
+// files, so the studio can show them for delete/relink instead of the
+// server silently deleting them on boot.
+app.get('/api/reconciliation', async (req, res) => {
+    res.json(lastReconciliation);
+});
+
 app.get('/api/exports', async (req, res) => {
     try {
         const exportDir = path.join(__dirname, 'public/exports');
@@ -1678,11 +1764,23 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 
 // One chunk of a chunked upload. Chunks are appended in arrival order to
 // uploads/chunks/<uploadId>.part; the client sends them sequentially.
+// Every chunk carries its SHA-256 (chunkHash): a chunk whose bytes do not
+// match is rejected before it can corrupt the reassembled file. A sidecar
+// (uploads/chunks/<uploadId>.meta.json) records which indexes arrived, so
+// /complete can prove nothing is missing or doubled, and a retried chunk
+// is idempotent instead of appending twice.
+const CHUNK_HASH_RE = /^[0-9a-f]{64}$/;
+function chunkMetaPath(uploadId) { return path.join(CHUNK_UPLOAD_DIR, `${uploadId}.meta.json`); }
+async function readChunkMeta(uploadId) {
+    try { return await fs.readJson(chunkMetaPath(uploadId)); } catch (_) { return null; }
+}
+
 app.post('/api/upload/chunk', chunkUpload.single('chunk'), async (req, res) => {
     try {
         const uploadId = String((req.body && req.body.uploadId) || '');
         const chunkIndex = Number(req.body && req.body.chunkIndex);
         const totalChunks = Number(req.body && req.body.totalChunks);
+        const chunkHash = String((req.body && req.body.chunkHash) || '').toLowerCase();
         if (!UPLOAD_ID_RE.test(uploadId)) {
             if (req.file) await fs.remove(req.file.path).catch(() => {});
             return res.status(400).json({ error: 'Bad uploadId' });
@@ -1693,12 +1791,37 @@ app.post('/api/upload/chunk', chunkUpload.single('chunk'), async (req, res) => {
             await fs.remove(req.file.path).catch(() => {});
             return res.status(400).json({ error: 'Bad chunk index' });
         }
-        const partPath = path.join(CHUNK_UPLOAD_DIR, `${uploadId}.part`);
+        if (!CHUNK_HASH_RE.test(chunkHash)) {
+            await fs.remove(req.file.path).catch(() => {});
+            return res.status(400).json({ error: 'Missing chunk hash' });
+        }
         const data = await fs.readFile(req.file.path);
+        const actualHash = crypto.createHash('sha256').update(data).digest('hex');
+        if (actualHash !== chunkHash) {
+            await fs.remove(req.file.path).catch(() => {});
+            return res.status(400).json({ error: 'Chunk failed integrity check, please retry' });
+        }
+        const meta = (await readChunkMeta(uploadId)) || { totalChunks, received: {} };
+        if (meta.totalChunks !== totalChunks) {
+            await fs.remove(req.file.path).catch(() => {});
+            return res.status(400).json({ error: 'Chunk count changed mid-upload, please retry' });
+        }
+        if (meta.received[String(chunkIndex)] === chunkHash) {
+            // Retry of an already-stored chunk: idempotent, don't append twice.
+            await fs.remove(req.file.path).catch(() => {});
+            return res.json({ ok: true, received: Object.keys(meta.received).length, totalChunks, duplicate: true });
+        }
+        if (meta.received[String(chunkIndex)]) {
+            await fs.remove(req.file.path).catch(() => {});
+            return res.status(400).json({ error: 'Chunk index already received with a different hash' });
+        }
+        const partPath = path.join(CHUNK_UPLOAD_DIR, `${uploadId}.part`);
         await fs.appendFile(partPath, data);
         await fs.remove(req.file.path).catch(() => {});
+        meta.received[String(chunkIndex)] = chunkHash;
+        await fs.writeJson(chunkMetaPath(uploadId), meta);
         if (chunkIndex === 0) sweepStaleChunkUploads(); // opportunistic cleanup
-        res.json({ ok: true, received: chunkIndex + 1, totalChunks });
+        res.json({ ok: true, received: Object.keys(meta.received).length, totalChunks });
     } catch (err) {
         console.error(err);
         sendApiError(res, err, 'Chunk upload failed');
@@ -1713,14 +1836,33 @@ app.post('/api/upload/complete', async (req, res) => {
         const uploadId = String(body.uploadId || '');
         const projectId = parseProjectId(body.projectId, 1);
         const totalSize = Number(body.totalSize);
+        const totalChunks = Number(body.totalChunks);
         if (!UPLOAD_ID_RE.test(uploadId)) return res.status(400).json({ error: 'Bad uploadId' });
         if (!Number.isFinite(totalSize) || totalSize <= 0 || totalSize > FINAL_MAX_BYTES) {
             return res.status(400).json({ error: 'File too large (800MB max)' });
+        }
+        if (!Number.isInteger(totalChunks) || totalChunks <= 0) {
+            return res.status(400).json({ error: 'Bad chunk count' });
         }
         const partPath = path.join(CHUNK_UPLOAD_DIR, `${uploadId}.part`);
         const st = await fs.stat(partPath).catch(() => null);
         if (!st || st.size !== totalSize) {
             if (st) await fs.remove(partPath).catch(() => {});
+            await fs.remove(chunkMetaPath(uploadId)).catch(() => {});
+            return res.status(400).json({ error: 'Incomplete upload, please retry' });
+        }
+        // The sidecar proves every chunk index arrived exactly once: size
+        // alone can't catch a doubled or skipped chunk of equal length.
+        const meta = await readChunkMeta(uploadId);
+        let allChunksPresent = !!meta && meta.totalChunks === totalChunks;
+        if (allChunksPresent) {
+            for (let i = 0; i < totalChunks; i++) {
+                if (!meta.received || meta.received[String(i)] === undefined) { allChunksPresent = false; break; }
+            }
+        }
+        if (!allChunksPresent) {
+            await fs.remove(partPath).catch(() => {});
+            await fs.remove(chunkMetaPath(uploadId)).catch(() => {});
             return res.status(400).json({ error: 'Incomplete upload, please retry' });
         }
         const fileName = String(body.fileName || 'upload.bin');
@@ -1732,6 +1874,7 @@ app.post('/api/upload/complete', async (req, res) => {
             validated = security.validateMediaUpload({ originalname: fileName, mimetype: body.mimeType });
         } catch (err) {
             await fs.remove(partPath).catch(() => {});
+            await fs.remove(chunkMetaPath(uploadId)).catch(() => {});
             throw err;
         }
         const ext = validated.ext;
@@ -1741,6 +1884,7 @@ app.post('/api/upload/complete', async (req, res) => {
         await fs.ensureDir(destDir);
         const absPath = path.join(destDir, filename);
         await fs.move(partPath, absPath, { overwrite: false });
+        await fs.remove(chunkMetaPath(uploadId)).catch(() => {});
         sweepStaleChunkUploads();
         const out = await finalizeUploadedMedia({
             absPath,
@@ -2929,7 +3073,7 @@ app.post('/api/export/mp4', async (req, res) => {
         const outputPath = path.join(__dirname, 'public/exports', exportName);
         await fs.ensureDir(path.dirname(outputPath));
 
-        if (!crossfade || clips.length === 2) {
+        if (!crossfade) {
             // Concat demuxer is reliable for simple joins
             const listPath = path.join(__dirname, 'public/exports', `concat_${Date.now()}.txt`);
             const listBody = clips.map(c => `file '${c.fullPath.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n');
@@ -2957,7 +3101,14 @@ app.post('/api/export/mp4', async (req, res) => {
                 await fs.remove(listPath).catch(() => {});
             }
         } else {
-            // Re-encode concat with optional short crossfade via xfade filter chain
+            // Re-encode with a short crossfade via the xfade filter chain.
+            // Works for 2 clips as well as 3+: previously the concat path
+            // was forced whenever clips.length === 2, silently ignoring
+            // crossfade. Clips without an audio stream get a video-only
+            // crossfade — acrossfade would fail on them.
+            const hasAudio = [];
+            for (const clip of clips) hasAudio.push(await probeHasAudio(clip.fullPath));
+            const allHaveAudio = hasAudio.every(Boolean);
             let command = ffmpeg();
             clips.forEach(c => { command = command.input(c.fullPath); });
             const fadeDur = 0.5;
@@ -2967,21 +3118,21 @@ app.post('/api/export/mp4', async (req, res) => {
             let offset = Math.max(0, toFiniteNumber(clips[0].duration, 1) - fadeDur);
             for (let i = 1; i < clips.length; i++) {
                 const vOut = i === clips.length - 1 ? '[vout]' : `[v${i}]`;
-                const aOut = i === clips.length - 1 ? '[aout]' : `[a${i}]`;
                 filter += `${lastLabel}[${i}:v]xfade=transition=fade:duration=${fadeDur}:offset=${offset}${vOut};`;
-                filter += `${lastAudio}[${i}:a]acrossfade=d=${fadeDur}${aOut};`;
+                if (allHaveAudio) {
+                    const aOut = i === clips.length - 1 ? '[aout]' : `[a${i}]`;
+                    filter += `${lastAudio}[${i}:a]acrossfade=d=${fadeDur}${aOut};`;
+                    lastAudio = aOut;
+                }
                 lastLabel = vOut;
-                lastAudio = aOut;
                 offset += Math.max(0, toFiniteNumber(clips[i].duration, 1) - fadeDur);
             }
-            await runFfmpeg(
-                command
-                    .complexFilter(filter.replace(/;$/g, ''))
-                    .outputOptions(['-map [vout]', '-map [aout]', '-preset ultrafast'])
-                    .videoCodec('libx264')
-                    .audioCodec('aac')
-                    .output(outputPath)
-            );
+            const outputOptions = allHaveAudio
+                ? ['-map [vout]', '-map [aout]', '-preset ultrafast']
+                : ['-map [vout]', '-an', '-preset ultrafast'];
+            command = command.complexFilter(filter.replace(/;$/g, '')).outputOptions(outputOptions).videoCodec('libx264');
+            if (allHaveAudio) command = command.audioCodec('aac');
+            await runFfmpeg(command.output(outputPath));
         }
 
         res.json({ success: true, url: `/exports/${exportName}` });
@@ -3049,6 +3200,7 @@ app.get('/api/ai/settings', async (req, res) => {
                 model: settings.model,
                 apiKey: settings.apiKey ? '••••••••' : '',
                 ollamaHost: settings.ollamaHost,
+                openaiBaseUrl: settings.openaiBaseUrl,
                 hasApiKey: !!settings.apiKey
             }
         });
@@ -3065,6 +3217,7 @@ app.put('/api/ai/settings', async (req, res) => {
             provider: body.provider != null ? body.provider : current.provider,
             model: body.model != null ? body.model : current.model,
             ollamaHost: body.ollamaHost != null ? body.ollamaHost : current.ollamaHost,
+            openaiBaseUrl: body.openaiBaseUrl != null ? body.openaiBaseUrl : current.openaiBaseUrl,
             apiKey: body.apiKey && body.apiKey !== '••••••••' ? body.apiKey : current.apiKey
         };
         const saved = await writeAiSettings(next);
@@ -3075,6 +3228,7 @@ app.put('/api/ai/settings', async (req, res) => {
                 model: saved.model,
                 apiKey: saved.apiKey ? '••••••••' : '',
                 ollamaHost: saved.ollamaHost,
+                openaiBaseUrl: saved.openaiBaseUrl,
                 hasApiKey: !!saved.apiKey
             }
         });
@@ -3091,6 +3245,7 @@ app.post('/api/ai/test', async (req, res) => {
             provider: body.provider || current.provider,
             model: body.model || current.model,
             ollamaHost: body.ollamaHost || current.ollamaHost,
+            openaiBaseUrl: body.openaiBaseUrl || current.openaiBaseUrl,
             apiKey: body.apiKey && body.apiKey !== '••••••••' ? body.apiKey : current.apiKey
         };
         const response = await callAiChat(settings, 'Reply with exactly: OK', 'You are a connection test bot.');
@@ -3104,47 +3259,6 @@ app.post('/api/ai/test', async (req, res) => {
             error: safe,
             response: safe
         });
-    }
-});
-
-app.post('/api/ai/generate', async (req, res) => {
-    try {
-        const premise = String((req.body && req.body.premise) || '').trim();
-        if (!premise) throw createHttpError('premise is required', 400);
-        const genre = String((req.body && req.body.genre) || 'Mystery').trim();
-        const targetScenes = Math.max(2, Math.min(12, Number((req.body && req.body.targetScenes) || 5)));
-        const tone = String((req.body && req.body.tone) || 'neutral').trim();
-        const settings = await readAiSettings();
-
-        const prompt = `Create an interactive choose-your-own-adventure outline as JSON only.
-Premise: ${premise}
-Genre: ${genre}
-Tone: ${tone}
-Target scenes: ${targetScenes}
-Return JSON shaped like:
-{
-  "title": "...",
-  "genre": "...",
-  "tone": "...",
-  "premise": "...",
-  "scenes": [
-    { "id": 1, "title": "...", "description": "...", "choices": [{ "label": "...", "goesTo": 2 }] }
-  ]
-}`;
-
-        let outline = null;
-        try {
-            const text = await callAiChat(settings, prompt);
-            outline = extractJsonBlock(text);
-        } catch (err) {
-            console.warn('AI generate failed, using fallback outline:', err.message);
-        }
-        if (!outline || !Array.isArray(outline.scenes) || !outline.scenes.length) {
-            outline = buildFallbackOutline({ premise, genre, targetScenes, tone });
-        }
-        res.json({ success: true, outline });
-    } catch (err) {
-        sendApiError(res, err);
     }
 });
 

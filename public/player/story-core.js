@@ -367,6 +367,19 @@
                 }
             });
 
+            // Long stretch with nothing to do: the viewer watches passively
+            // for over a minute before the first choice. (Spiel video tip:
+            // keep interactive elements frequent, keep segments short.) Only
+            // for scenes that do ask something eventually — a scene with no
+            // choices at all is a dead end, already flagged above.
+            const choiceTimes = points
+                .filter(point => point.choices.length > 0)
+                .map(point => Number(point.time) || 0);
+            const firstChoiceAt = choiceTimes.length ? Math.min(...choiceTimes) : Infinity;
+            if (isReachable && scene.duration >= 60 && !scene.ending && firstChoiceAt > 60) {
+                add('info', 'long-quiet-scene', `Viewers watch ${Math.round(firstChoiceAt)}s of "${scene.name}" before anything to do — add a mid-scene choice moment to keep them involved.`, { sceneId: scene.id });
+            }
+
             const endsMovie = !hasChoices && !scene.next && !scene.timeout;
             if (endsMovie) {
                 if (scene.ending) {

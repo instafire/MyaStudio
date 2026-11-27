@@ -274,6 +274,42 @@ test('story check: flags missing start, dead ends, unfinished choices and loops'
     assert.equal(messy.ready, false);
 });
 
+test('story check: a long scene with nothing to do in the first minute is flagged', () => {
+    const quiet = Story.analyzeStory({
+        startSceneId: 'a',
+        scenes: [
+            { id: 'a', name: 'Long intro', src: 'a', duration: 90 },
+            { id: 'b', name: 'B', src: 'b', duration: 4, ending: { title: 'End B' } }
+        ],
+        choicePoints: [{ id: 'p', sceneId: 'a', time: 85, choices: [{ id: '1', label: 'To B', to: 'b' }] }]
+    });
+    const issue = quiet.issues.find(item => item.code === 'long-quiet-scene');
+    assert.ok(issue, 'long quiet stretch is flagged');
+    assert.equal(issue.level, 'info');
+    assert.equal(issue.sceneId, 'a');
+    assert.match(issue.message, /85s/);
+
+    const busy = Story.analyzeStory({
+        startSceneId: 'a',
+        scenes: [
+            { id: 'a', name: 'Busy', src: 'a', duration: 90 },
+            { id: 'b', name: 'B', src: 'b', duration: 4, ending: { title: 'End B' } }
+        ],
+        choicePoints: [{ id: 'p', sceneId: 'a', time: 30, choices: [{ id: '1', label: 'To B', to: 'b' }] }]
+    });
+    assert.ok(!busy.issues.some(item => item.code === 'long-quiet-scene'), 'an early choice moment clears it');
+
+    const short = Story.analyzeStory({
+        startSceneId: 'a',
+        scenes: [
+            { id: 'a', name: 'Short', src: 'a', duration: 45 },
+            { id: 'b', name: 'B', src: 'b', duration: 4, ending: { title: 'End B' } }
+        ],
+        choicePoints: [{ id: 'p', sceneId: 'a', time: 40, choices: [{ id: '1', label: 'To B', to: 'b' }] }]
+    });
+    assert.ok(!short.issues.some(item => item.code === 'long-quiet-scene'), 'short scenes are exempt');
+});
+
 test('story check: a menu where every choice comes back is a trap, and unset flags are caught', () => {
     const result = Story.analyzeStory({
         startSceneId: 'menu',

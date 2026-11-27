@@ -374,7 +374,11 @@ test('error paths sanitize unexpected server errors', () => {
     assert.match(handler, /statusCode >= 500 \? 'Server error'/);
     assert.doesNotMatch(handler, /error: err\.message/);
     const send = sliceBetween(server, 'function sendApiError(', 'function normalizeFilter');
-    assert.match(send, /statusCode >= 500 \? fallback/);
+    // 5xx is still sanitized by default; only errors explicitly flagged
+    // safeToShow keep their message — and the only producer of that flag
+    // is runFfmpeg, whose detail is sanitized at the source (Nov 27, 2026).
+    assert.match(send, /statusCode >= 500 && !\(err && err\.safeToShow\)\) \? fallback/);
+    assert.equal(server.match(/safeToShow = true/g).length, 1, 'only runFfmpeg may flag an error safe to show');
 });
 
 test('stored export and poster metadata are validated before use', () => {

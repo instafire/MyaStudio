@@ -198,3 +198,601 @@
             border: 1px solid rgba(255, 255, 255, 0.08);
             background: linear-gradient(180deg, rgba(8, 11, 16, 0.76), rgba(6, 8, 12, 0.92));
             backdrop-filter: blur(18px);
+        }
+        .topbar-actions { pointer-events: auto; }
+
+        .experience-panel {
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+        .device-frame {
+            position: relative;
+            flex: 1;
+            min-height: 320px;
+            border-radius: 1.4rem;
+            overflow: hidden;
+            background: #000;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .device-frame iframe {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
+            background: #000;
+        }
+        .device-placeholder {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            background-size: cover;
+            background-position: center;
+            cursor: pointer;
+        }
+        .device-placeholder::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(180deg, rgba(4, 5, 8, 0.25), rgba(4, 5, 8, 0.78));
+        }
+        .device-placeholder > * { position: relative; z-index: 1; }
+        .play-button {
+            width: 4.2rem;
+            height: 4.2rem;
+            border-radius: 999px;
+            border: 0;
+            background: linear-gradient(135deg, #ff5b2e, #ff8e3c);
+            color: #130500;
+            font-size: 1.5rem;
+            font-weight: 800;
+            cursor: pointer;
+            box-shadow: var(--shadow);
+        }
+        .device-placeholder p {
+            margin: 0;
+            color: #d7dee9;
+            font-size: 0.85rem;
+        }
+
+        .meta-panel {
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.1rem;
+            overflow-y: auto;
+            min-height: 0;
+        }
+        .meta-genre {
+            display: inline-block;
+            padding: 0.3rem 0.7rem;
+            border-radius: 999px;
+            background: var(--accent-soft);
+            color: #ffb59e;
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .meta-title {
+            margin: 0.7rem 0 0;
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.7rem;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            line-height: 1.15;
+        }
+        .meta-synopsis {
+            margin: 0.6rem 0 0;
+            color: var(--muted);
+            font-size: 0.92rem;
+            line-height: 1.55;
+        }
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.6rem;
+        }
+        .metric {
+            display: flex;
+            flex-direction: column;
+            gap: 0.15rem;
+            padding: 0.7rem 0.6rem;
+            border-radius: 1rem;
+            background: var(--chip);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            text-align: center;
+        }
+        .metric b { font-size: 1.05rem; font-weight: 700; }
+        .metric span { color: var(--muted); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; }
+        .action-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.6rem;
+            align-items: center;
+        }
+        .like-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            min-height: 2.65rem;
+            padding: 0 1rem;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text);
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .like-button.liked {
+            background: var(--accent-soft);
+            border-color: rgba(255, 91, 46, 0.5);
+            color: #ffb59e;
+        }
+        .meta-foot {
+            margin-top: auto;
+            padding-top: 0.9rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem 1rem;
+            color: var(--muted);
+            font-size: 0.78rem;
+        }
+        .meta-foot a { color: #ffb59e; font-weight: 600; }
+
+        .nav-arrow {
+            position: fixed;
+            right: 1rem;
+            z-index: 50;
+            width: 2.7rem;
+            height: 2.7rem;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(6, 9, 14, 0.78);
+            color: var(--text);
+            font-size: 1.1rem;
+            cursor: pointer;
+            backdrop-filter: blur(12px);
+        }
+        .nav-prev { bottom: 4.4rem; }
+        .nav-next { bottom: 1.2rem; }
+        .nav-arrow:disabled { opacity: 0.35; cursor: default; }
+
+        .feed-loading,
+        .feed-empty,
+        .feed-error {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.9rem;
+            padding: 6rem 1.5rem 2rem;
+            text-align: center;
+            scroll-snap-align: start;
+        }
+        .feed-loading p,
+        .feed-empty p,
+        .feed-error p { margin: 0; color: var(--muted); max-width: 34rem; line-height: 1.55; }
+        .feed-empty h2,
+        .feed-error h2 {
+            margin: 0;
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.5rem;
+            letter-spacing: -0.02em;
+        }
+
+        @media (max-width: 900px) {
+            .feed-slide-inner { grid-template-columns: minmax(0, 1fr); }
+            .device-frame { min-height: 46vh; }
+            .feed-slide { padding-top: 5rem; }
+            .brand-subtitle { display: none; }
+            .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div class="topbar-card">
+            <span class="brand-mark">M</span>
+            <span class="brand-copy">
+                <span class="brand-title">Mya Feed</span>
+                <span class="brand-subtitle">Interactive movies, picked for you</span>
+            </span>
+        </div>
+        <div class="topbar-actions">
+            <span class="pill" id="feed-count"><strong>0</strong>&nbsp;movies</span>
+            <a class="accent-button" id="open-studio-top" href="#">Open studio</a>
+        </div>
+    </header>
+    <main class="feed-shell" id="feed-shell" aria-label="Published movies">
+        <div class="feed-loading" id="feed-loading">
+            <h2>Loading the feed&hellip;</h2>
+            <p>Fetching the published movies.</p>
+        </div>
+    </main>
+    <button class="nav-arrow nav-prev" id="nav-prev" type="button" aria-label="Previous movie">&#8593;</button>
+    <button class="nav-arrow nav-next" id="nav-next" type="button" aria-label="Next movie">&#8595;</button>
+    <noscript>
+        <div class="feed-error">
+            <h2>JavaScript required</h2>
+            <p>Mya Feed needs JavaScript to load the published movies.</p>
+        </div>
+    </noscript>
+    <script>
+    (function () {
+        'use strict';
+
+        var API_ITEMS = '/api/feed/items';
+        var API_ENGAGE = '/api/feed/engage';
+        var POLL_MS = 15000;
+
+        var shell = document.getElementById('feed-shell');
+        var countPill = document.getElementById('feed-count');
+        var openStudioTop = document.getElementById('open-studio-top');
+        var navPrev = document.getElementById('nav-prev');
+        var navNext = document.getElementById('nav-next');
+
+        var items = [];
+        var studioUrl = '';
+        var activeIndex = 0;
+        var observer = null;
+        var pollTimer = null;
+        var likedSet = readSet('mya-feed-likes', localStorage);
+        var viewedSet = readSet('mya-feed-views', sessionStorage);
+
+        function readSet(key, storage) {
+            try {
+                var raw = storage.getItem(key);
+                return raw ? new Set(JSON.parse(raw)) : new Set();
+            } catch (e) { return new Set(); }
+        }
+        function saveSet(key, storage, set) {
+            try { storage.setItem(key, JSON.stringify(Array.from(set))); } catch (e) { /* storage unavailable */ }
+        }
+
+        function escapeHtml(value) {
+            return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+            });
+        }
+        function escapeAttr(value) { return escapeHtml(value).replace(/`/g, '&#96;'); }
+
+        function isLoopbackOrigin(origin) {
+            try {
+                var host = new URL(origin).hostname;
+                return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+            } catch (e) { return false; }
+        }
+
+        // The API returns absolute player/poster/studio URLs built from
+        // STUDIO_PUBLIC_ORIGIN, which defaults to http://127.0.0.1:3000 when
+        // unset. A viewer loading the feed through a public host cannot reach
+        // that loopback origin, and the feed CSP confines frames and images
+        // to same-origin — so when this page is served from a non-loopback
+        // origin, rewrite loopback origins to the page's own origin. The feed
+        // and the studio are served through the same public host. On
+        // loopback this is a no-op.
+        function effectiveUrl(url) {
+            if (!url) return null;
+            try {
+                var parsed = new URL(url, window.location.href);
+                if (isLoopbackOrigin(parsed.origin) && !isLoopbackOrigin(window.location.origin)) {
+                    return window.location.origin + parsed.pathname + parsed.search + parsed.hash;
+                }
+                return parsed.href;
+            } catch (e) { return url; }
+        }
+
+        function formatDuration(seconds) {
+            var total = Math.max(0, Math.round(Number(seconds) || 0));
+            var minutes = Math.floor(total / 60);
+            var rest = total % 60;
+            return minutes + ':' + (rest < 10 ? '0' : '') + rest;
+        }
+        function formatDate(value) {
+            if (!value) return '';
+            var date = new Date(value);
+            if (isNaN(date.getTime())) return String(value);
+            return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+        }
+        function formatCount(value) {
+            var n = Number(value) || 0;
+            return n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : String(n);
+        }
+
+        function playerUrlFor(item) { return effectiveUrl(item.playerUrl); }
+        function posterUrlFor(item) { return effectiveUrl(item.posterUrl); }
+        function studioUrlFor() { return effectiveUrl(studioUrl) || '#'; }
+
+        function slideHtml(item, index) {
+            var player = playerUrlFor(item);
+            var poster = posterUrlFor(item);
+            var liked = likedSet.has(item.exportName);
+            var genre = item.genre || 'Interactive movie';
+            var synopsis = item.synopsis || 'An interactive movie. Your choices decide what happens next.';
+            var posterStyle = poster ? ' style="background-image: url(\'' + escapeAttr(poster) + '\')"' : '';
+            return '' +
+                '<section class="feed-slide" data-export="' + escapeAttr(item.exportName) + '" data-index="' + index + '">' +
+                    '<div class="feed-poster"' + posterStyle + '></div>' +
+                    '<div class="feed-slide-inner">' +
+                        '<div class="experience-panel">' +
+                            '<div class="device-frame" data-player="' + escapeAttr(player || '') + '" data-title="' + escapeAttr(item.title) + '">' +
+                                '<div class="device-placeholder"' + posterStyle + '>' +
+                                    '<button class="play-button" type="button" aria-label="Play ' + escapeAttr(item.title) + '">&#9654;</button>' +
+                                    '<p>Tap to play &mdash; your choices decide what happens next</p>' +
+                                '</div>' +
+                            '</div>' +
+                        '</div>' +
+                        '<aside class="meta-panel">' +
+                            '<div>' +
+                                '<span class="meta-genre">' + escapeHtml(genre) + '</span>' +
+                                '<h2 class="meta-title">' + escapeHtml(item.title) + '</h2>' +
+                                '<p class="meta-synopsis">' + escapeHtml(synopsis) + '</p>' +
+                            '</div>' +
+                            '<div class="metric-grid">' +
+                                '<div class="metric"><b>' + escapeHtml(item.clipCount) + '</b><span>scenes</span></div>' +
+                                '<div class="metric"><b>' + escapeHtml(item.choiceCount) + '</b><span>choices</span></div>' +
+                                '<div class="metric"><b>' + escapeHtml(formatDuration(item.duration)) + '</b><span>runtime</span></div>' +
+                                '<div class="metric"><b class="view-count">' + escapeHtml(formatCount(item.viewCount)) + '</b><span>views</span></div>' +
+                            '</div>' +
+                            '<div class="action-row">' +
+                                '<button class="like-button' + (liked ? ' liked' : '') + '" type="button" data-action="like" aria-pressed="' + (liked ? 'true' : 'false') + '">' +
+                                    (liked ? '&hearts;' : '&#9825;') + ' <span class="like-count">' + escapeHtml(formatCount(item.likeCount)) + '</span>' +
+                                '</button>' +
+                                '<button class="ghost-button" type="button" data-action="copy">Copy player link</button>' +
+                                (player ? '<a class="ghost-button" data-action="open" href="' + escapeAttr(player) + '" target="_blank" rel="noopener">Open player</a>' : '') +
+                            '</div>' +
+                            '<div class="meta-foot">' +
+                                '<span>Published ' + escapeHtml(formatDate(item.publishedAt)) + '</span>' +
+                                '<span>' + escapeAttr(item.exportName) + '</span>' +
+                                '<a href="' + escapeAttr(studioUrlFor()) + '">Jump back into studio &rarr;</a>' +
+                            '</div>' +
+                        '</aside>' +
+                    '</div>' +
+                '</section>';
+        }
+
+        function loadIframe(frame) {
+            var src = frame.getAttribute('data-player');
+            if (!src || frame.querySelector('iframe')) return;
+            var iframe = document.createElement('iframe');
+            iframe.src = src;
+            iframe.title = frame.getAttribute('data-title') || 'Interactive movie player';
+            iframe.setAttribute('allow', 'autoplay; fullscreen');
+            iframe.setAttribute('allowfullscreen', '');
+            frame.appendChild(iframe);
+            var placeholder = frame.querySelector('.device-placeholder');
+            if (placeholder) placeholder.style.display = 'none';
+        }
+        function unloadIframe(frame) {
+            var iframe = frame.querySelector('iframe');
+            if (iframe) iframe.remove();
+            var placeholder = frame.querySelector('.device-placeholder');
+            if (placeholder) placeholder.style.display = '';
+        }
+        function syncIframes() {
+            var frames = shell.querySelectorAll('.device-frame');
+            frames.forEach(function (frame, i) {
+                if (Math.abs(i - activeIndex) <= 1) loadIframe(frame);
+                else unloadIframe(frame);
+            });
+        }
+
+        function engage(exportName, action, liked) {
+            var body = { exportName: exportName, action: action };
+            if (action === 'like') body.liked = !!liked;
+            return fetch(API_ENGAGE, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            }).then(function (res) {
+                if (!res.ok) throw new Error('engage failed: ' + res.status);
+                return res.json();
+            }).then(function (data) { return data && data.item ? data.item : null; })
+            .catch(function () { return null; });
+        }
+
+        function trackView(item) {
+            if (!item || viewedSet.has(item.exportName)) return;
+            viewedSet.add(item.exportName);
+            saveSet('mya-feed-views', sessionStorage, viewedSet);
+            engage(item.exportName, 'view').then(function (updated) {
+                if (updated) updateCounts(item.exportName, updated);
+            });
+        }
+
+        function updateCounts(exportName, updated) {
+            var slide = shell.querySelector('[data-export="' + CSS.escape(exportName) + '"]');
+            if (!slide || !updated) return;
+            var viewEl = slide.querySelector('.view-count');
+            if (viewEl) viewEl.textContent = formatCount(updated.viewCount);
+            var likeEl = slide.querySelector('.like-count');
+            if (likeEl) likeEl.textContent = formatCount(updated.likeCount);
+            var item = items.find(function (it) { return it.exportName === exportName; });
+            if (item) { item.viewCount = updated.viewCount; item.likeCount = updated.likeCount; }
+        }
+
+        function setActive(index, scroll) {
+            if (!items.length) return;
+            activeIndex = Math.max(0, Math.min(items.length - 1, index));
+            var slides = shell.querySelectorAll('.feed-slide');
+            if (scroll && slides[activeIndex]) {
+                slides[activeIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+            navPrev.disabled = activeIndex === 0;
+            navNext.disabled = activeIndex === items.length - 1;
+            syncIframes();
+            trackView(items[activeIndex]);
+        }
+
+        function observeSlides() {
+            if (observer) observer.disconnect();
+            observer = new IntersectionObserver(function (entries) {
+                entries.forEach(function (entry) {
+                    if (!entry.isIntersecting) return;
+                    var index = Number(entry.target.getAttribute('data-index'));
+                    if (index !== activeIndex) {
+                        activeIndex = index;
+                        navPrev.disabled = activeIndex === 0;
+                        navNext.disabled = activeIndex === items.length - 1;
+                        syncIframes();
+                        trackView(items[activeIndex]);
+                    }
+                });
+            }, { root: shell, threshold: 0.55 });
+            shell.querySelectorAll('.feed-slide').forEach(function (slide) { observer.observe(slide); });
+        }
+
+        function renderEmpty() {
+            shell.innerHTML = '' +
+                '<div class="feed-empty">' +
+                    '<h2>No published movies yet</h2>' +
+                    '<p>Publish a movie from the studio and it will show up here as a vertical feed you can scroll through and play.</p>' +
+                    '<a class="accent-button" href="' + escapeAttr(studioUrlFor()) + '">Open the studio</a>' +
+                '</div>';
+            countPill.innerHTML = '<strong>0</strong>&nbsp;movies';
+            navPrev.disabled = true;
+            navNext.disabled = true;
+        }
+
+        function renderError(message) {
+            shell.innerHTML = '' +
+                '<div class="feed-error">' +
+                    '<h2>Couldn&rsquo;t load the feed</h2>' +
+                    '<p>' + escapeHtml(message || 'The server didn&rsquo;t answer. Try again in a moment.') + '</p>' +
+                    '<button class="accent-button" type="button" id="feed-retry">Try again</button>' +
+                '</div>';
+            var retry = document.getElementById('feed-retry');
+            if (retry) retry.addEventListener('click', function () { loadItems(true); });
+        }
+
+        function render() {
+            if (!items.length) { renderEmpty(); return; }
+            var keepIndex = Math.min(activeIndex, items.length - 1);
+            shell.innerHTML = items.map(function (item, i) { return slideHtml(item, i); }).join('');
+            countPill.innerHTML = '<strong>' + escapeHtml(items.length) + '</strong>&nbsp;' + (items.length === 1 ? 'movie' : 'movies');
+            openStudioTop.href = studioUrlFor();
+            activeIndex = keepIndex;
+            observeSlides();
+            setActive(keepIndex, false);
+            var slides = shell.querySelectorAll('.feed-slide');
+            if (slides[keepIndex]) slides[keepIndex].scrollIntoView({ behavior: 'auto', block: 'start' });
+        }
+
+        function loadItems(showLoading) {
+            if (showLoading) {
+                shell.innerHTML = '<div class="feed-loading"><h2>Loading the feed&hellip;</h2><p>Fetching the published movies.</p></div>';
+            }
+            return fetch(API_ITEMS, { headers: { 'Accept': 'application/json' } })
+                .then(function (res) {
+                    if (!res.ok) throw new Error('Feed request failed: ' + res.status);
+                    return res.json();
+                })
+                .then(function (data) {
+                    var nextItems = Array.isArray(data.items) ? data.items : [];
+                    studioUrl = data.studioUrl || '';
+                    openStudioTop.href = studioUrlFor();
+                    var sameOrder = nextItems.length === items.length &&
+                        nextItems.every(function (it, i) { return items[i] && items[i].exportName === it.exportName; });
+                    if (sameOrder) {
+                        // Same movies: update counts in place, keep scroll position and iframes.
+                        nextItems.forEach(function (it) { updateCounts(it.exportName, it); });
+                        items = nextItems;
+                        return;
+                    }
+                    items = nextItems;
+                    render();
+                })
+                .catch(function (err) {
+                    if (!items.length) renderError(err && err.message ? err.message : '');
+                });
+        }
+
+        function copyText(text, button) {
+            function done(label) {
+                if (!button) return;
+                var original = button.textContent;
+                button.textContent = label;
+                setTimeout(function () { button.textContent = original; }, 1600);
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(function () { done('Copied'); }, function () { fallbackCopy(text, done); });
+            } else {
+                fallbackCopy(text, done);
+            }
+        }
+        function fallbackCopy(text, done) {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); done('Copied'); }
+            catch (e) { done('Copy failed'); }
+            document.body.removeChild(ta);
+        }
+
+        shell.addEventListener('click', function (event) {
+            var target = event.target;
+            var placeholder = target.closest('.device-placeholder');
+            if (placeholder) {
+                var frame = placeholder.closest('.device-frame');
+                if (frame) loadIframe(frame);
+                return;
+            }
+            var button = target.closest('button[data-action]');
+            if (!button) return;
+            var slide = button.closest('.feed-slide');
+            if (!slide) return;
+            var exportName = slide.getAttribute('data-export');
+            var item = items.find(function (it) { return it.exportName === exportName; });
+            if (!item) return;
+            var action = button.getAttribute('data-action');
+            if (action === 'like') {
+                var liked = !likedSet.has(exportName);
+                if (liked) likedSet.add(exportName); else likedSet.delete(exportName);
+                saveSet('mya-feed-likes', localStorage, likedSet);
+                button.classList.toggle('liked', liked);
+                button.setAttribute('aria-pressed', liked ? 'true' : 'false');
+                button.innerHTML = (liked ? '&hearts;' : '&#9825;') + ' <span class="like-count">' + escapeHtml(formatCount(item.likeCount)) + '</span>';
+                engage(exportName, 'like', liked).then(function (updated) {
+                    if (updated) updateCounts(exportName, updated);
+                    else {
+                        // Revert on failure so the count never lies.
+                        if (liked) likedSet.delete(exportName); else likedSet.add(exportName);
+                        saveSet('mya-feed-likes', localStorage, likedSet);
+                        button.classList.toggle('liked', !liked);
+                        button.setAttribute('aria-pressed', !liked ? 'true' : 'false');
+                        button.innerHTML = (!liked ? '&hearts;' : '&#9825;') + ' <span class="like-count">' + escapeHtml(formatCount(item.likeCount)) + '</span>';
+                    }
+                });
+            } else if (action === 'copy') {
+                var url = playerUrlFor(item);
+                if (url) copyText(url, button);
+            }
+        });
+
+        navPrev.addEventListener('click', function () { setActive(activeIndex - 1, true); });
+        navNext.addEventListener('click', function () { setActive(activeIndex + 1, true); });
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'ArrowDown' || event.key === 'j' || event.key === 'J') { event.preventDefault(); setActive(activeIndex + 1, true); }
+            else if (event.key === 'ArrowUp' || event.key === 'k' || event.key === 'K') { event.preventDefault(); setActive(activeIndex - 1, true); }
+        });
+
+        loadItems(false).then(function () {
+            pollTimer = setInterval(function () { loadItems(false); }, POLL_MS);
+        });
+    })();
+    </script>
+</body>
+</html>

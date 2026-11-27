@@ -3200,9 +3200,11 @@
                                 <div class="flex flex-wrap gap-3 items-center">
                                     <label class="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer"><input type="radio" v-model="aiSettings.provider" value="ollama"> Local Ollama</label>
                                     <label class="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer"><input type="radio" v-model="aiSettings.provider" value="openai"> OpenAI</label>
+                                    <label class="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer"><input type="radio" v-model="aiSettings.provider" value="openai-compatible"> OpenAI-compatible</label>
                                 </div>
-                                <input v-if="aiSettings.provider === 'openai'" v-model="aiSettings.apiKey" type="password" aria-label="OpenAI API key" class="glass-input px-2 py-2 text-xs" placeholder="API key">
-                                <input v-else v-model="aiSettings.ollamaHost" aria-label="Ollama host" class="glass-input px-2 py-2 text-xs" placeholder="http://127.0.0.1:11434">
+                                <input v-if="aiSettings.provider === 'openai' || aiSettings.provider === 'openai-compatible'" v-model="aiSettings.apiKey" type="password" aria-label="API key" class="glass-input px-2 py-2 text-xs" placeholder="API key">
+                                <input v-if="aiSettings.provider === 'openai-compatible'" v-model="aiSettings.openaiBaseUrl" aria-label="OpenAI-compatible base URL" class="glass-input px-2 py-2 text-xs" placeholder="https://api.openai.com/v1">
+                                <input v-if="aiSettings.provider === 'ollama'" v-model="aiSettings.ollamaHost" aria-label="Ollama host" class="glass-input px-2 py-2 text-xs" placeholder="http://127.0.0.1:11434">
                                 <input v-model="aiSettings.model" aria-label="AI model" class="glass-input px-2 py-2 text-xs" placeholder="Model name">
                                 <div class="flex gap-2">
                                     <button type="button" @click="testAiConnection" class="glass-btn flex-1 px-3 py-2 text-xs font-semibold">Test connection</button>
@@ -3320,7 +3322,7 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                 editorSourceId: null, editorClips: [], timelineZoom: 100, timelineScroll: 0, playheadTime: 0, snapEnabled: true, selectedTimelineClipId: null, timelineThumbnails: [], timelineWaveUrl: null, showClipList: true, showAdvProps: true, isDraggingPlayhead: false, isDraggingTrim: null,
                 positionHistory: [], isProcessing: false, _previewTimeoutFired: false, _toastTimer: null, previewTimeLeft: null, previewTimerId: null,
                 toast: { show: false, msg: '', type: 'success' },
-                aiSettings: { provider: 'ollama', model: 'llama3.2:3b', apiKey: '', ollamaHost: 'http://127.0.0.1:11434' },
+                aiSettings: { provider: 'ollama', model: 'llama3.2:3b', apiKey: '', ollamaHost: 'http://127.0.0.1:11434', openaiBaseUrl: 'https://api.openai.com/v1' },
                 showAiModal: false, aiGenerating: false, aiOutline: null, aiPremise: '', aiGenre: 'Mystery', aiTargetScenes: 7, aiTone: 'cinematic', aiValidation: null,
                 aiAgentInventory: null, aiAgentPlan: null, aiAgentMode: '', aiAgentWarning: '', aiAgentStage: '', aiReplaceExisting: false, aiRenameProject: false,
                 lastGifUrl: '', gifFps: 10, gifWidth: 400, editorPlaying: { video: false, event: false },
@@ -4686,11 +4688,15 @@ logicSourceId: null, logicCurrentTime: 0, showLogicOverlay: false, currentEditin
                     : (Date.now().toString(16) + '-' + Math.random().toString(16).slice(2) + '-4upload');
                 const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
                 for (let i = 0; i < totalChunks; i++) {
+                    const slice = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+                    const digest = await crypto.subtle.digest('SHA-256', await slice.arrayBuffer());
+                    const hash = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
                     const fd = new FormData();
-                    fd.append('chunk', file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE), 'chunk.bin');
+                    fd.append('chunk', slice, 'chunk.bin');
                     fd.append('uploadId', uploadId);
                     fd.append('chunkIndex', String(i));
                     fd.append('totalChunks', String(totalChunks));
+                    fd.append('chunkHash', hash);
                     await this.requestJson('/api/upload/chunk', { method: 'POST', body: fd }, 'Upload failed');
                     this.uploadProgress = ' ' + Math.round(((i + 1) / totalChunks) * 100) + '%';
                 }

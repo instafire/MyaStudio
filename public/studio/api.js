@@ -55,6 +55,13 @@ function xhrUpload(url, formData, onProgress) {
     });
 }
 
+// SHA-256 of a blob, hex-encoded — the server verifies every chunk
+// against this hash before appending it (see /api/upload/chunk).
+async function sha256Hex(blob) {
+    const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+    return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 // onProgress(fraction, phase) with phase 'upload' | 'processing'.
 export async function uploadFile(file, projectId, onProgress = () => {}) {
     if (file.size > HARD_MAX) throw new Error(`${file.name} is larger than the 800 MB limit.`);
@@ -75,11 +82,13 @@ export async function uploadFile(file, projectId, onProgress = () => {}) {
         });
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     for (let index = 0; index < totalChunks; index++) {
+        const slice = file.slice(index * CHUNK_SIZE, (index + 1) * CHUNK_SIZE);
         const form = new FormData();
         form.append('uploadId', uploadId);
         form.append('chunkIndex', String(index));
         form.append('totalChunks', String(totalChunks));
-        form.append('chunk', file.slice(index * CHUNK_SIZE, (index + 1) * CHUNK_SIZE), 'chunk.bin');
+        form.append('chunkHash', await sha256Hex(slice));
+        form.append('chunk', slice, 'chunk.bin');
         let attempt = 0;
         for (;;) {
             try {

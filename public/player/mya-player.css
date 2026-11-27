@@ -303,13 +303,24 @@ html.mya-player-page body { height: 100dvh; }
 .mp-timer {
     position: relative;
     height: 4px;
-    margin: 0 auto 16px;
+    margin: 0 auto 6px;
     width: min(620px, 80%);
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.18);
     overflow: hidden;
 }
 .mp-timer[hidden] { display: none; }
+.mp-timer-text {
+    display: block;
+    margin: 0 auto 14px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.85);
+    font-variant-numeric: tabular-nums;
+}
+.mp-timer-text[hidden] { display: none; }
 .mp-timer-fill {
     position: absolute;
     inset: 0;
